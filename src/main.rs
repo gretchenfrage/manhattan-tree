@@ -1,10 +1,12 @@
 
 extern crate num;
+extern crate take_mut;
 
 use std::collections::VecDeque;
 use std::cmp::min;
 use std::mem;
 
+use take_mut::take;
 use num::Integer;
 
 /// A coord which identifies an octant in 3D space.
@@ -138,6 +140,19 @@ pub struct Children<T> {
     nnn: T
 }
 impl<T> Children<T> {
+    fn new(mut gen: impl FnMut(SubOctant) -> T) -> Self {
+        Children {
+            ppp: default([Pole::P, Pole::P, Pole::P]),
+            npp: default([Pole::N, Pole::P, Pole::P]),
+            pnp: default([Pole::P, Pole::N, Pole::P]),
+            ppn: default([Pole::P, Pole::P, Pole::N]),
+            pnn: default([Pole::P, Pole::N, Pole::N]),
+            npn: default([Pole::N, Pole::P, Pole::N]),
+            nnp: default([Pole::N, Pole::N, Pole::P]),
+            nnn: default([Pole::N, Pole::N, Pole::N]),
+        }
+    }
+
     fn get(&self, key: SubOctant) -> &T {
         match key {
             [Pole::P, Pole::P, Pole::P] => &self.ppp,
@@ -180,12 +195,7 @@ impl<T> Tree<T> {
         if let Some(ref mut root) = self.root {
             root.add(coord, elem);
         } else {
-            let mut elems = VecDeque::new();
-            elems.push_back(elem);
-            self.root = Some(Octant::Leaf {
-                coord: coord,
-                elems
-            })
+            self.root = Some(Octant::leaf_of(coord, elems));
         }
     }
 
@@ -218,34 +228,84 @@ enum Octant<T> {
         center: OctCoord,
         children: Children<Box<Octant<T>>>,
     },
+    Empty,
 }
 impl<T> Octant<T> {
+    /// Create a leaf octant which contains a single element
+    fn leaf_of(coord: BaseCoord, elem: T) -> Self {
+        let mut elems = VecDeque::new();
+        elems.push_back(elem);
+        Octant::Leaf {
+            coord,
+            elems
+        }
+    }
+
     /// Does not assume that the coordinate is part of this octant's range
-    pub fn add(&mut self, elem_coord: BaseCoord, elem: T) {
-        match self {
-            &mut Octant::Leaf {
-                coord: ref leaf_coord,
-                elems: ref mut leaf_elems,
+    fn add(&mut self, elem_coord: BaseCoord, elem: T) {
+        take(self, |octant| match octant {
+            Octant::Leaf {
+                coord: leaf_coord,
+                elems: mut leaf_elems,
             } => {
                 // case 1: we're a leaf
-                if *leaf_coord == elem_coord {
+                if leaf_coord == elem_coord {
                     // case 1a: we've found matching coords
                     // simply insert into queue
-                    leaf_elems.push_back(elem)
+                    leaf_elems.push_back(elem);
+                    Octant::Leaf {
+                        coord: leaf_coord,
+                        elems: leaf_elems
+                    }
                 } else {
-                    // case 2a: the coords are non-identical
+                    // case 1b: the coords are non-identical
                     // branch at the smallest common octant
-                    let branch_coord = elem_coord.lowest_common_octant(*leaf_coord);
+                    let branch_coord = elem_coord.lowest_common_octant(leaf_coord);
 
+                    let old_suboctant = branch_coord.suboctant_base(leaf_coord);
+                    let old_child = Octant::Leaf {
+                        coord: leaf_coord,
+                        elems: leaf_elems
+                    };
+                    let mut old_child = Some(old_child);
+
+                    let new_suboctant = branch_coord.suboctant_base(elem_coord);
+                    let new_child = Octant::leaf_of(elem_coord, elem);
+                    let mut new_child = Some(new_child);
+
+                    let children = Children::new(|suboctant| {
+                        if suboctant == old_suboctant {
+                            Box::new(old_child.take().unwrap())
+                        } else if suboctant == new_suboctant {
+                            Box::new(new_child.take().unwrap())
+                        } else {
+                            Box::new(Octant::Empty)
+                        }
+                    });
+
+                    Octant::Branch {
+                        center: branch_coord,
+                        children
+                    }
                 }
             },
-            &mut Octant::Branch {
-                center: ref branch_center,
-                children: ref mut branch_children
+            Octant::Branch {
+                center: branch_center,
+                children: mut branch_children
             } => {
-                unimplemented!()
+                // case 2: we're a branch
+                if let Some(child) = branch_center.suboctant_base(elem_coord) {
+                    // case 2a: the new element is a child of this branch
+                    // simply add to the appropriate child
+                    branch_children.get_mut(child).add(elem_coord, elem);
+                } else {
+                    // case 2b: the new element is not a child of this branch
+                    // we need to expand the branch center to a new lowest common octant of children
+                    
+                }
+
             },
-        }
+        })
     }
 
     /// Take an element, and return whether this octant has become empty, and therefore
