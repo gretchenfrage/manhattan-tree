@@ -6,4 +6,5 @@ authors = ["Phoenix <kahlo.phoenix@gmail.com>"]
 [dependencies]
 num = "0.2.0"
 take_mut = "0.2.2"
+rand = "0.5.5"
 

@@ -1,6 +1,12 @@
 
+#![feature(nll)]
+
 extern crate num;
 extern crate take_mut;
+
+#[cfg(test)]
+mod test;
+mod bounds;
 
 use std::collections::VecDeque;
 use std::cmp::max;
