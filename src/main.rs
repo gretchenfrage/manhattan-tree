@@ -2,19 +2,30 @@
 #![feature(nll)]
 
 extern crate num;
-extern crate take_mut;
 
 #[cfg(test)]
 mod test;
 mod bounds;
 
+use bounds::CompBounds;
+
 use std::collections::VecDeque;
 use std::cmp::max;
 use std::fmt::{Debug, Formatter};
 use std::fmt;
+use std::ptr;
 
-use take_mut::take;
 use num::Integer;
+
+fn replace_and_get<T, O>(elem: &mut T, func: impl FnOnce(T) -> (T, O)) -> O {
+    unsafe {
+        let elem_ref = elem;
+        let elem = ptr::read(elem_ref);
+        let (elem, out) = func(elem);
+        ptr::write(elem_ref, elem);
+        out
+    }
+}
 
 /// A coord which identifies an octant in 3D space.
 ///
@@ -116,6 +127,11 @@ impl From<[u64; 3]> for BaseCoord {
         BaseCoord {
             comps
         }
+    }
+}
+impl Into<[u64; 3]> for BaseCoord {
+    fn into(self) -> [u64; 3] {
+        self.comps
     }
 }
 
@@ -267,6 +283,7 @@ enum Octant<T> {
     Branch {
         coord: OctCoord,
         children: Children<Box<Octant<T>>>,
+        bounds: CompBounds<u64>,
     },
     Empty,
 }
@@ -281,10 +298,11 @@ impl<T> Octant<T> {
         }
     }
 
-    /// Does not assume that the coordinate is part of this octant's range
-    fn add(&mut self, elem_coord: BaseCoord, elem: T) {
+    /// Does not assume that the coordinate is part of this octant's range.
+    /// Returns whether a new leaf was created
+    fn add(&mut self, elem_coord: BaseCoord, elem: T) -> bool {
         // replace self through pattern matching
-        take(self, |octant| match octant {
+        replace_and_get(self, |octant| match octant {
             Octant::Leaf {
                 coord: leaf_coord,
                 elems: mut leaf_elems,
@@ -292,12 +310,15 @@ impl<T> Octant<T> {
                 // case 1: we're a leaf
                 if leaf_coord == elem_coord {
                     // case 1a: we've found matching coords
+
                     // simply insert into queue
                     leaf_elems.push_back(elem);
-                    Octant::Leaf {
+
+                    // new leaf was directly not created
+                    (Octant::Leaf {
                         coord: leaf_coord,
-                        elems: leaf_elems
-                    }
+                        elems: leaf_elems,
+                    }, false)
                 } else {
                     // case 1b: the coords are non-identical
                     // branch at the smallest common octant
@@ -326,25 +347,38 @@ impl<T> Octant<T> {
                         }
                     });
 
-                    Octant::Branch {
+                    let mut bounds = CompBounds::new();
+                    bounds.add(elem_coord);
+                    bounds.add(leaf_coord);
+
+                    // new leaf was directly created
+                    (Octant::Branch {
                         coord: branch_coord,
-                        children
-                    }
+                        children,
+                        bounds,
+                    }, true)
                 }
             },
             Octant::Branch {
                 coord: branch_coord,
                 children: mut branch_children,
+                mut bounds,
             } => {
                 // case 2: we're a branch
                 if let Some(child) = branch_coord.suboctant(elem_coord) {
                     // case 2a: the new element is a child of this branch
                     // simply add to the appropriate child
-                    branch_children.get_mut(child).add(elem_coord, elem);
-                    Octant::Branch {
+                    let created = branch_children.get_mut(child).add(elem_coord, elem);
+                    // if the child created a leaf, add to bounds
+                    if created {
+                        bounds.add(elem_coord);
+                    }
+                    // pass whether leaf was created to parent
+                    (Octant::Branch {
                         coord: branch_coord,
                         children: branch_children,
-                    }
+                        bounds
+                    }, created)
                 } else {
                     // case 2b: the new element is not a child of this branch
                     // in this case, we need to produce a new super branch
@@ -353,11 +387,17 @@ impl<T> Octant<T> {
                     let new_branch_coord = old_branch_coord.to_base()
                         .lowest_common_octant(elem_coord);
 
+                    // the new branch's bounds is a clone of the old branch's bounds, plus
+                    // the additional element
+                    let mut new_branch_bounds = bounds.clone();
+                    new_branch_bounds.add(elem_coord);
+
                     let old_suboctant =
                         new_branch_coord.suboctant(old_branch_coord.to_base()).unwrap();
                     let old_child = Octant::Branch {
                         coord: old_branch_coord,
-                        children: branch_children
+                        children: branch_children,
+                        bounds
                     };
                     let mut old_child = Some(old_child);
 
@@ -375,16 +415,19 @@ impl<T> Octant<T> {
                         }
                     });
 
-                    Octant::Branch {
+                    // a new leaf was created
+                    (Octant::Branch {
                         coord: new_branch_coord,
-                        children
-                    }
+                        children,
+                        bounds: new_branch_bounds,
+                    }, true)
                 }
             },
             Octant::Empty => {
                 // case 3: we're empty
                 // simply become a single-element leaf
-                Octant::leaf_of(elem_coord, elem)
+                // which does of course create a new leaf
+                (Octant::leaf_of(elem_coord, elem), true)
             }
         })
     }

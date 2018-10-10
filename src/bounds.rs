@@ -1,11 +1,14 @@
 
 use std::collections::{HashSet, BTreeMap};
 use std::hash::Hash;
+use std::fmt::{Debug, Formatter};
+use std::fmt;
 
 use num::Integer;
 
 /// Holds a cloud of vectors, and keeps track of the minimum and maximum value of each component
 /// across all the vectors.
+#[derive(Clone)]
 pub struct CompBounds<I: Integer + Copy + Hash> {
     x: BTreeMap<I, u32>,
     y: BTreeMap<I, u32>,
@@ -50,7 +53,8 @@ impl<I: Integer + Copy + Hash> CompBounds<I> {
         self.z.iter().next_back().map(|(&i, _)| i)
     }
 
-    pub fn add(&mut self, elem: [I; 3]) {
+    pub fn add(&mut self, elem: impl Into<[I; 3]>) {
+        let elem = elem.into();
         if self.cloud.insert(elem) {
             if let Some(n) = self.x.get_mut(&elem[0]) {
                 *n += 1;
@@ -72,7 +76,8 @@ impl<I: Integer + Copy + Hash> CompBounds<I> {
         }
     }
 
-    pub fn remove(&mut self, elem: [I; 3]) {
+    pub fn remove(&mut self, elem: impl Into<[I; 3]>) {
+        let elem = elem.into();
         if self.cloud.remove(&elem) {
             // decrement count, or remove if it would get to 0
 
@@ -121,5 +126,10 @@ impl<I: Integer + Copy + Hash> CompBounds<I> {
                 self.z.remove(&elem[2]);
             }
         }
+    }
+}
+impl<I: Integer + Copy + Hash + Debug> Debug for CompBounds<I> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        f.write_str(&format!("Bounds({:?})", self.cloud))
     }
 }
