@@ -25,6 +25,7 @@ impl<I: Integer + Copy + Hash> CompBounds<I> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn cloud(&self) -> &HashSet<[I; 3]> {
         &self.cloud
     }

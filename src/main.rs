@@ -6,10 +6,11 @@ extern crate num;
 #[cfg(test)]
 mod test;
 mod bounds;
+mod smallqueue;
 
 use bounds::CompBounds;
+use smallqueue::SmallQueue;
 
-use std::collections::VecDeque;
 use std::cmp::{min, max};
 use std::fmt::{Debug, Formatter};
 use std::fmt;
@@ -18,6 +19,16 @@ use std::ops::Not;
 
 use num::abs;
 use num::Integer;
+
+/// Mutate a referenced element by transferring ownership through a function.
+fn replace<T>(elem: &mut T, func: impl FnOnce(T) -> T) {
+    unsafe {
+        let elem_ref = elem;
+        let elem = ptr::read(elem_ref);
+        let elem = func(elem);
+        ptr::write(elem_ref, elem);
+    }
+}
 
 /// Mutate a referenced element by transferring ownership through a function, which also
 /// produces an output data which is returned from this function.
@@ -316,7 +327,7 @@ impl<T> Tree<T> {
 enum Octant<T> {
     Leaf {
         coord: BaseCoord,
-        elems: VecDeque<T>, // TODO: store in-place, with genericity over array size
+        elems: SmallQueue<T>,
     },
     Branch {
         coord: OctCoord,
@@ -328,11 +339,9 @@ enum Octant<T> {
 impl<T> Octant<T> {
     /// Create a leaf octant which contains a single element
     fn leaf_of(coord: BaseCoord, elem: T) -> Self {
-        let mut elems = VecDeque::new();
-        elems.push_back(elem);
         Octant::Leaf {
             coord,
-            elems
+            elems: SmallQueue::of(elem)
         }
     }
 
@@ -350,7 +359,7 @@ impl<T> Octant<T> {
                     // case 1a: we've found matching coords
 
                     // simply insert into queue
-                    leaf_elems.push_back(elem);
+                    leaf_elems.add(elem);
 
                     // new leaf was directly not created
                     (Octant::Leaf {
@@ -626,7 +635,7 @@ fn main() {
 
     let mut timer = Stopwatch::start_new();
 
-    for i in 0..1000000 {
+    for i in 0..100000 {
         let elem = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
         tree.add(elem, ());
         if i % 1000 == 0 {
@@ -641,7 +650,7 @@ fn main() {
     let mut rng: XorShiftRng = SeedableRng::from_seed(
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
 
-    for i in 0..1000000 {
+    for i in 0..100000 {
         let focus = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
 
 
