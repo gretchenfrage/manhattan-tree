@@ -10,13 +10,17 @@ mod bounds;
 use bounds::CompBounds;
 
 use std::collections::VecDeque;
-use std::cmp::max;
+use std::cmp::{min, max};
 use std::fmt::{Debug, Formatter};
 use std::fmt;
 use std::ptr;
+use std::ops::Not;
 
+use num::abs;
 use num::Integer;
 
+/// Mutate a referenced element by transferring ownership through a function, which also
+/// produces an output data which is returned from this function.
 fn replace_and_get<T, O>(elem: &mut T, func: impl FnOnce(T) -> (T, O)) -> O {
     unsafe {
         let elem_ref = elem;
@@ -71,11 +75,35 @@ impl OctCoord {
             comps: [x, y, z]
         }
     }
+
+    fn closest_suboctant(self, coord: BaseCoord) -> SubOctant {
+        let x = closest_pole(self.base.comps[0], self.scale, coord.comps[0]);
+        let y = closest_pole(self.base.comps[1], self.scale, coord.comps[1]);
+        let z = closest_pole(self.base.comps[2], self.scale, coord.comps[2]);
+        [x, y, z]
+    }
 }
 impl Debug for OctCoord {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         f.write_str(&format!("{:?}*2^{}", self.base, self.scale))
     }
+}
+
+/// Helper function for OctCoord::closest_suboctant
+fn closest_pole(oct_comp: u64, oct_scale: u8, base_comp: u64) -> Pole {
+    // Search for the determinant bit, going from big-endian to little-endian, but stopping at the
+    // bit with an endianness of oct_scale
+    let max_bit = 0x1 << 63;
+    let mut oct_comp = oct_comp << oct_scale;
+    let mut base_comp = base_comp;
+    for _ in 0..min(64 - oct_scale, 63) {
+        if (oct_comp & max_bit) != (base_comp & max_bit) {
+            return Pole::from_bit((base_comp & max_bit) >> 63).unwrap();
+        }
+        oct_comp <<= 1;
+        base_comp <<= 1;
+    }
+    Pole::from_bit((base_comp & max_bit) >> 63).unwrap()
 }
 
 /// Helper function for OctCoord::suboctant_base.
@@ -115,6 +143,12 @@ impl BaseCoord {
             },
             scale
         }
+    }
+
+    fn manhattan_dist(self, other: BaseCoord) -> u64 {
+        abs(self.comps[0] as i64 - other.comps[0] as i64) as u64 +
+            abs(self.comps[1] as i64 - other.comps[1] as i64) as u64 +
+            abs(self.comps[2] as i64 - other.comps[2] as i64) as u64
     }
 }
 impl Debug for BaseCoord {
@@ -171,6 +205,16 @@ impl Pole {
             Some(Pole::P)
         } else {
             None
+        }
+    }
+}
+impl Not for Pole {
+    type Output = Pole;
+
+    fn not(self) -> <Self as Not>::Output {
+        match self {
+            Pole::P => Pole::N,
+            Pole::N => Pole::P,
         }
     }
 }
@@ -253,11 +297,16 @@ impl<T> Tree<T> {
         }
     }
 
+    pub fn closest(&self, focus: impl Into<BaseCoord>) -> Option<BaseCoord> {
+        unimplemented!()
+    }
+
+    /*
     pub fn take(&mut self, focus: impl Into<BaseCoord>) -> Option<T> {
         let focus = focus.into();
         let (elem, emptied) =
             if let Some(ref mut root) = self.root {
-                let (elem, emptied) = root.take(focus);
+                let (elem, emptied) = root.take(focus, true);
                 (Some(elem), emptied)
             } else {
                 (None, false)
@@ -267,6 +316,7 @@ impl<T> Tree<T> {
         }
         elem
     }
+    */
 
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
@@ -323,8 +373,6 @@ impl<T> Octant<T> {
                     // case 1b: the coords are non-identical
                     // branch at the smallest common octant
                     let branch_coord = elem_coord.lowest_common_octant(leaf_coord);
-
-                    println!("branching leaves {:?} and {:?} at {:?}", elem_coord, leaf_coord, branch_coord);
 
                     let old_suboctant = branch_coord.suboctant(leaf_coord).unwrap();
                     let old_child = Octant::Leaf {
@@ -432,10 +480,124 @@ impl<T> Octant<T> {
         })
     }
 
-    /// Take an element, and return whether this octant has become empty, and therefore
-    /// invalid and in need of deletion.
-    pub fn take(&mut self, _focus: BaseCoord) -> (T, bool) {
-        unimplemented!()
+    /// If this octant is competing, it must not be focused.
+    fn closest(&self, focus: BaseCoord, competitor: Option<BaseCoord>) -> Option<BaseCoord> {
+        match self {
+            // the leaf case is simple: the closest element is the only element
+            &Octant::Leaf {
+                coord,
+                ..
+            } => Some(coord),
+            // the empty case is trivial: there is no element to be closest
+            &Octant::Empty => None,
+            // the branch case is more complex
+            &Octant::Branch {
+                coord,
+                ref children,
+                ref bounds,
+            } => {
+                if let Some(competitor) = competitor {
+                    // we're competing
+
+                    // if we're competing, sanity assert that we're not focused
+                    debug_assert!(coord.suboctant(focus).is_none());
+                    // we've asserted that we're not focused
+
+                    // short circuit if bounds determine that it's impossible to beat the competitor
+                    // manhattan distance
+                    let closest_suboct = coord.closest_suboctant(focus);
+                    // x axis short circuit
+                    if closest_suboct[0] == Pole::N {
+                        if (focus.comps[0] as i64 - competitor.comps[0] as i64) <
+                            bounds.min_x().unwrap() as i64 - focus.comps[0] as i64 {
+                            return None;
+                        }
+                    } else {
+                        if (competitor.comps[0] as i64 - focus.comps[0] as i64) <
+                            focus.comps[0] as i64 - bounds.max_x().unwrap() as i64 {
+                            return None;
+                        }
+                    }
+                    // y axis short circuit
+                    if closest_suboct[1] == Pole::N {
+                        if (focus.comps[1] as i64 - competitor.comps[1] as i64) <
+                            bounds.min_y().unwrap() as i64 - focus.comps[1] as i64 {
+                            return None;
+                        }
+                    } else {
+                        if (competitor.comps[1] as i64 - focus.comps[1] as i64) <
+                            focus.comps[1] as i64 - bounds.max_y().unwrap() as i64 {
+                            return None;
+                        }
+                    }
+                    // z axis short circuit
+                    if closest_suboct[2] == Pole::N {
+                        if (focus.comps[2] as i64 - competitor.comps[2] as i64) <
+                            bounds.min_z().unwrap() as i64 - focus.comps[2] as i64 {
+                            return None;
+                        }
+                    } else {
+                        if (competitor.comps[2] as i64 - focus.comps[2] as i64) <
+                            focus.comps[2] as i64 - bounds.max_z().unwrap() as i64 {
+                            return None;
+                        }
+                    }
+
+                    
+                    unimplemented!()
+                } else {
+                    // we're main
+
+                    // attempt to get a closest element from a focused child
+                    // that will be our first find
+                    let focused_suboct: Option<SubOctant> = coord.suboctant(focus);
+
+                    let mut best: Option<BaseCoord> = focused_suboct
+                        .and_then(|suboct| children.get(suboct)
+                            .closest(focus, None));
+
+                    // then search outwards from the focused suboctant, competing against the best
+                    suboct_search_from(focused_suboct, |suboct| {
+                        if let Some(better) = children.get(suboct)
+                            .closest(focus, best) {
+
+                            best = Some(better);
+                        }
+                    });
+
+                    // best now holds this subtree's closest element, and the search has been
+                    // done efficiently
+                    best
+                }
+
+            }
+        }
+    }
+}
+
+fn suboct_search_from(start: Option<SubOctant>, mut func: impl FnMut(SubOctant)) {
+    if let Some(start) = start {
+        // start by flipping a single pole at a time, to touch adjacent tiles
+        func([!start[0], start[1], start[2]]);
+        func([start[0], !start[1], start[2]]);
+        func([start[0], start[1], !start[2]]);
+
+        // then flip 2 poles at a time, to achieve touch tiles
+        func([start[0], !start[1], !start[2]]);
+        func([!start[0], start[1], !start[2]]);
+        func([!start[0], !start[1], start[2]]);
+
+        // then flip att poles for the opposite corner
+        func([!start[0], !start[1], !start[2]]);
+    } else {
+        // if there is no start point, simply searching every combination
+        for &x in [Pole::N, Pole::P].iter() {
+            for &y in [Pole::N, Pole::P].iter() {
+                for &z in [Pole::N, Pole::P].iter() {
+                    func([x, y, z]);
+                }
+            }
+        }
     }
 }
 
