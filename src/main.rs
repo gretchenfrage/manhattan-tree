@@ -543,8 +543,18 @@ impl<T> Octant<T> {
                         }
                     }
 
-                    
-                    unimplemented!()
+                    // search children for a better element than the competitor
+                    // branching out from, and including, the closest suboct
+                    let mut best: Option<BaseCoord> = None;
+                    suboct_search_from(Some(closest_suboct), true, |suboct| {
+                        if let Some(better) = children.get(suboct)
+                            .closest(focus, Some(best.unwrap_or(competitor))) {
+                            best = Some(better);
+                        }
+                    });
+
+                    // done
+                    best
                 } else {
                     // we're main
 
@@ -557,7 +567,7 @@ impl<T> Octant<T> {
                             .closest(focus, None));
 
                     // then search outwards from the focused suboctant, competing against the best
-                    suboct_search_from(focused_suboct, |suboct| {
+                    suboct_search_from(focused_suboct, false,|suboct| {
                         if let Some(better) = children.get(suboct)
                             .closest(focus, best) {
 
@@ -575,8 +585,12 @@ impl<T> Octant<T> {
     }
 }
 
-fn suboct_search_from(start: Option<SubOctant>, mut func: impl FnMut(SubOctant)) {
+fn suboct_search_from(start: Option<SubOctant>, include_start: bool, mut func: impl FnMut(SubOctant)) {
     if let Some(start) = start {
+        if include_start {
+            func(start);
+        }
+
         // start by flipping a single pole at a time, to touch adjacent tiles
         func([!start[0], start[1], start[2]]);
         func([start[0], !start[1], start[2]]);
