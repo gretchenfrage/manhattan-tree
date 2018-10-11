@@ -281,7 +281,7 @@ impl<T> Children<T> {
 pub struct Tree<T> {
     root: Option<Octant<T>>
 }
-impl<T> Tree<T> {
+impl<T: Debug> Tree<T> {
     pub fn new() -> Self {
         Tree {
             root: None
@@ -298,7 +298,12 @@ impl<T> Tree<T> {
     }
 
     pub fn closest(&self, focus: impl Into<BaseCoord>) -> Option<BaseCoord> {
-        unimplemented!()
+        let focus = focus.into();
+        if let Some(ref root) = self.root {
+            root.closest(focus, None)
+        } else {
+            None
+        }
     }
 
     /*
@@ -337,7 +342,7 @@ enum Octant<T> {
     },
     Empty,
 }
-impl<T> Octant<T> {
+impl<T: Debug> Octant<T> {
     /// Create a leaf octant which contains a single element
     fn leaf_of(coord: BaseCoord, elem: T) -> Self {
         let mut elems = VecDeque::new();
@@ -483,11 +488,23 @@ impl<T> Octant<T> {
     /// If this octant is competing, it must not be focused.
     fn closest(&self, focus: BaseCoord, competitor: Option<BaseCoord>) -> Option<BaseCoord> {
         match self {
-            // the leaf case is simple: the closest element is the only element
+            // the leaf case is simple: the closest element is the only element, but filter
+            // using the competitor manhattan distance
             &Octant::Leaf {
                 coord,
                 ..
-            } => Some(coord),
+            } => match competitor {
+                Some(competitor) if competitor.manhattan_dist(focus) <
+                    coord.manhattan_dist(focus) => {
+
+                    println!("found leaf {:?}, cannot beat competitor {:?}", coord, competitor);
+                    None
+                },
+                _ => {
+                    println!("found leaf {:?}, can beat competitor {:?}", coord, competitor);
+                    Some(coord)
+                }
+            },
             // the empty case is trivial: there is no element to be closest
             &Octant::Empty => None,
             // the branch case is more complex
@@ -498,6 +515,7 @@ impl<T> Octant<T> {
             } => {
                 if let Some(competitor) = competitor {
                     // we're competing
+                    println!("branch {:?}, competitor {:?}", coord, competitor);
 
                     // if we're competing, sanity assert that we're not focused
                     debug_assert!(coord.suboctant(focus).is_none());
@@ -506,42 +524,61 @@ impl<T> Octant<T> {
                     // short circuit if bounds determine that it's impossible to beat the competitor
                     // manhattan distance
                     let closest_suboct = coord.closest_suboctant(focus);
+                    println!("closest suboct = {:?}", closest_suboct);
                     // x axis short circuit
                     if closest_suboct[0] == Pole::N {
-                        if (focus.comps[0] as i64 - competitor.comps[0] as i64) <
+                        if (competitor.manhattan_dist(focus) as i64) <
+                        //if (focus.comps[0] as i64 - competitor.comps[0] as i64) <
                             bounds.min_x().unwrap() as i64 - focus.comps[0] as i64 {
+                            println!("ss1");
                             return None;
                         }
                     } else {
-                        if (competitor.comps[0] as i64 - focus.comps[0] as i64) <
+                        if (competitor.manhattan_dist(focus) as i64) <
+                        //if (competitor.comps[0] as i64 - focus.comps[0] as i64) <
                             focus.comps[0] as i64 - bounds.max_x().unwrap() as i64 {
+                            println!("ss2");
                             return None;
                         }
                     }
                     // y axis short circuit
                     if closest_suboct[1] == Pole::N {
-                        if (focus.comps[1] as i64 - competitor.comps[1] as i64) <
+                        if (competitor.manhattan_dist(focus) as i64) <
+                        //if (focus.comps[1] as i64 - competitor.comps[1] as i64) <
                             bounds.min_y().unwrap() as i64 - focus.comps[1] as i64 {
+                            println!("ss3");
                             return None;
                         }
                     } else {
-                        if (competitor.comps[1] as i64 - focus.comps[1] as i64) <
+                        if (competitor.manhattan_dist(focus) as i64) <
+                        //if (competitor.comps[1] as i64 - focus.comps[1] as i64) <
                             focus.comps[1] as i64 - bounds.max_y().unwrap() as i64 {
+                            println!("ss4 focus/competitor dist={} focus/extreme dist={} max_y={}",
+                                     competitor.comps[1] as i64 - focus.comps[1] as i64,
+                                     focus.comps[1] as i64 - bounds.max_y().unwrap() as i64,
+                                     bounds.max_y().unwrap(),
+                            );
                             return None;
                         }
                     }
                     // z axis short circuit
                     if closest_suboct[2] == Pole::N {
-                        if (focus.comps[2] as i64 - competitor.comps[2] as i64) <
+                        if (competitor.manhattan_dist(focus) as i64) <
+                        //if (focus.comps[2] as i64 - competitor.comps[2] as i64) <
                             bounds.min_z().unwrap() as i64 - focus.comps[2] as i64 {
+                            println!("ss5");
                             return None;
                         }
                     } else {
-                        if (competitor.comps[2] as i64 - focus.comps[2] as i64) <
+                        if (competitor.manhattan_dist(focus) as i64) <
+                        //if (competitor.comps[2] as i64 - focus.comps[2] as i64) <
                             focus.comps[2] as i64 - bounds.max_z().unwrap() as i64 {
+                            println!("ss6");
                             return None;
                         }
                     }
+
+                    println!("passed short circuits");
 
                     // search children for a better element than the competitor
                     // branching out from, and including, the closest suboct
@@ -556,21 +593,28 @@ impl<T> Octant<T> {
                     // done
                     best
                 } else {
+                    println!("branch {:?}, no competitor", coord);
+
                     // we're main
 
                     // attempt to get a closest element from a focused child
                     // that will be our first find
                     let focused_suboct: Option<SubOctant> = coord.suboctant(focus);
 
+                    println!("focused suboct = {:?}", focused_suboct);
+
                     let mut best: Option<BaseCoord> = focused_suboct
                         .and_then(|suboct| children.get(suboct)
                             .closest(focus, None));
 
+                    println!("best = {:?}", best);
+
                     // then search outwards from the focused suboctant, competing against the best
                     suboct_search_from(focused_suboct, false,|suboct| {
+                        println!("checking child {:?} = {:?}", suboct, children.get(suboct));
                         if let Some(better) = children.get(suboct)
                             .closest(focus, best) {
-
+                            println!("replacing best {:?} with {:?}", best, better);
                             best = Some(better);
                         }
                     });
@@ -615,23 +659,64 @@ fn suboct_search_from(start: Option<SubOctant>, include_start: bool, mut func: i
     }
 }
 
+#[cfg(not(test))]
+extern crate rand;
+
+use rand::prng::XorShiftRng;
+use rand::{Rng, SeedableRng};
+
 fn main() {
     let mut tree = Tree::new();
+    let mut elems = Vec::new();
 
-    /*
-    tree.add([0, 0, 0], "a");
-    tree.add([0, 0, 0], "a2");
-    tree.add([1, 1, 1], "b");
-    */
-
-    for x in 0..2 {
-        for y in 0..3 {
-            for z in 0..5 {
-                println!("adding {}{}{}", z, y, z);
+    for x in 2..4 {
+        for y in 2..5 {
+            for z in 2..4 {
+                //println!("adding {}{}{}", z, y, z);
                 tree.add([x, y, z], format!("{}{}{}", x, y, z));
+                elems.push([x, y, z]);
             }
         }
     }
+    /*
+    tree.add([0, 0, 0], ());
+    elems.push([0, 0, 0]);
 
-    println!("{:#?}", tree);
+    tree.add([1, 0, 0], ());
+    elems.push([1, 0, 0]);
+    */
+
+    let mut rng: XorShiftRng = SeedableRng::from_seed(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+
+    for i in 0..100 {
+        let focus: [u64; 3] = [rng.gen::<u64>() % 10, rng.gen::<u64>() % 10, rng.gen::<u64>() % 10];
+
+        if i != 4 {
+            continue;
+        }
+
+        println!("{:#?}", tree);
+
+        let tree_closest: [u64; 3] = tree.closest(focus).unwrap().into();
+
+        elems.sort_by_key(|&elem| BaseCoord::from(elem).manhattan_dist(focus.into()));
+        let vec_closest = elems.iter().next().cloned().unwrap();
+
+        //if tree_closest != vec_closest {
+        if BaseCoord::from(tree_closest).manhattan_dist(focus.into()) !=
+            BaseCoord::from(vec_closest).manhattan_dist(focus.into()) {
+
+            eprintln!();
+            eprintln!("!!!!!!!!!!!incorrect closest (i={}):", i);
+            eprintln!("focus = {:?}", focus);
+            eprintln!("tree closest = {:?}", tree_closest);
+            eprintln!("vec closest = {:?}", vec_closest);
+            eprintln!();
+        } else {
+            //println!("correct! (focus={:?})", focus);
+        }
+    }
+
+    println!("done!");
 }
