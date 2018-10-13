@@ -336,8 +336,25 @@ impl<T> Tree<T> {
         i
     }
 
-    fn clean(&mut self) {
-        // clean up nodes that have become temp with a series of swap_remove
+    pub fn add(&mut self, coord: impl Into<BaseCoord>, elem: T) {
+        let coord = coord.into();
+        let (new_root, _) = Octant::add(None, self.root, self, coord, elem);
+        self.root = Some(new_root);
+        //self.clean();
+    }
+
+    pub fn closest(&self, focus: impl Into<BaseCoord>) -> Option<BaseCoord> {
+        let focus = focus.into();
+        Octant::closest(
+            self.root,
+            self,
+            focus,
+            None
+        )
+    }
+
+    /// Clean up Octant::Temp nodes, which requires a careful restructuring of the tree.
+    pub fn clean(&mut self) {
         // until we've scanned through the entire vec
         let mut i = 0;
         while i < self.nodes.len() {
@@ -379,6 +396,8 @@ impl<T> Tree<T> {
                         let suboctant = parent_coord.suboctant(child_coord).unwrap();
                         // and then change the index of that child
                         *parent_children.get_mut(suboctant) = Some(i);
+
+                        println!("cleaned!");
                     } else {
                         // this branch means that the parent of a node was not a branch
                         // which is illegal
@@ -394,13 +413,6 @@ impl<T> Tree<T> {
             i += 1;
         }
     }
-
-    pub fn add(&mut self, coord: impl Into<BaseCoord>, elem: T) {
-        let coord = coord.into();
-        let (new_root, _) = Octant::add(None, self.root, self, coord, elem);
-        self.root = Some(new_root);
-        self.clean();
-    }
 }
 
 impl<T: Debug> Debug for Tree<T> {
@@ -412,91 +424,7 @@ impl<T: Debug> Debug for Tree<T> {
     }
 }
 
-struct OctDebug<'a, T: Debug> {
-    nodes: &'a [Octant<T>],
-    index: Option<usize>,
-}
-impl<'a, T: Debug> Debug for OctDebug<'a, T> {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        if let Some(index) = self.index {
-            match &self.nodes[index] {
-                &Octant::Leaf {
-                    coord: ref coord,
-                    elems: ref elems,
-                    ..
-                } => {
-                    f.debug_struct("Leaf")
-                        .field("coord", coord)
-                        .field("elems", elems)
-                        .finish()
-                },
-                &Octant::Branch {
-                    coord: ref coord,
-                    children: ref children,
-                    ..
-                } => {
-                    f.debug_struct("Branch")
-                        .field("coord", coord)
-                        .field("children", &BranchChildrenDebug {
-                            nodes: self.nodes,
-                            children
-                        })
-                        .finish()
-                }
-                &Octant::Temp => {
-                    f.debug_struct("Temp")
-                        .finish()
-                }
-            }
-        } else {
-            f.debug_struct("Empty")
-                .finish()
-        }
-    }
-}
 
-struct BranchChildrenDebug<'a, T: Debug> {
-    nodes: &'a [Octant<T>],
-    children: &'a Children<Option<usize>>
-}
-impl<'a, T: Debug> Debug for BranchChildrenDebug<'a, T> {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        f.debug_struct("Children")
-            .field("ppp", &OctDebug {
-                nodes: self.nodes,
-                index: *self.children.get([Pole::P, Pole::P, Pole::P])
-            })
-            .field("npp", &OctDebug {
-                nodes: self.nodes,
-                index: *self.children.get([Pole::N, Pole::P, Pole::P])
-            })
-            .field("pnp", &OctDebug {
-                nodes: self.nodes,
-                index: *self.children.get([Pole::P, Pole::N, Pole::P])
-            })
-            .field("ppn", &OctDebug {
-                nodes: self.nodes,
-                index: *self.children.get([Pole::P, Pole::P, Pole::N])
-            })
-            .field("pnn", &OctDebug {
-                nodes: self.nodes,
-                index: *self.children.get([Pole::P, Pole::N, Pole::N])
-            })
-            .field("npn", &OctDebug {
-                nodes: self.nodes,
-                index: *self.children.get([Pole::N, Pole::P, Pole::N])
-            })
-            .field("nnp", &OctDebug {
-                nodes: self.nodes,
-                index: *self.children.get([Pole::N, Pole::N, Pole::P])
-            })
-            .field("nnn", &OctDebug {
-                nodes: self.nodes,
-                index: *self.children.get([Pole::N, Pole::N, Pole::N])
-            })
-            .finish()
-    }
-}
 
 #[derive(Debug)]
 enum Octant<T> {
@@ -646,7 +574,207 @@ impl<T> Octant<T> {
         (this_i, created)
     }
 
+    fn closest(this_i: Option<usize>, tree: &Tree<T>, focus: BaseCoord, competitor: Option<BaseCoord>) -> Option<BaseCoord> {
+        let this = this_i.map(|i| &tree.nodes[i]);
+        match this {
+            None => None,
+            Some(&Octant::Leaf {
+                coord,
+                ..
+            }) => {
+                if competitor
+                    .map(|competitor|
+                        competitor.manhattan_dist(focus) < coord.manhattan_dist(focus))
+                    .unwrap_or(false) {
 
+                    None
+                } else {
+                    Some(coord)
+                }
+            },
+            Some(&Octant::Branch {
+                coord,
+                ref children,
+                ref bounds,
+                ..
+            }) => {
+                if let Some(competitor) = competitor {
+                    debug_assert!(coord.suboctant(focus).is_none());
+
+                    let closest_suboct = coord.closest_suboctant(focus);
+
+                    // x axis short circuit
+                    if closest_suboct[0] == Pole::N {
+                        if (competitor.manhattan_dist(focus) as i64) <
+                            bounds.min_x().unwrap() as i64 - focus.comps[0] as i64 {
+                            return None;
+                        }
+                    } else {
+                        if (competitor.manhattan_dist(focus) as i64) <
+                            focus.comps[0] as i64 - bounds.max_x().unwrap() as i64 {
+                            return None;
+                        }
+                    }
+                    // y axis short circuit
+                    if closest_suboct[1] == Pole::N {
+                        if (competitor.manhattan_dist(focus) as i64) <
+                            bounds.min_y().unwrap() as i64 - focus.comps[1] as i64 {
+                            return None;
+                        }
+                    } else {
+                        if (competitor.manhattan_dist(focus) as i64) <
+                            focus.comps[1] as i64 - bounds.max_y().unwrap() as i64 {
+                            return None;
+                        }
+                    }
+                    // z axis short circuit
+                    if closest_suboct[2] == Pole::N {
+                        if (competitor.manhattan_dist(focus) as i64) <
+                            bounds.min_z().unwrap() as i64 - focus.comps[2] as i64 {
+                            return None;
+                        }
+                    } else {
+                        if (competitor.manhattan_dist(focus) as i64) <
+                            focus.comps[2] as i64 - bounds.max_z().unwrap() as i64 {
+                            return None;
+                        }
+                    }
+
+                    let mut best: Option<BaseCoord> = None;
+                    suboct_search_from(
+                        Some(closest_suboct),
+                        true,
+                        |suboct| {
+                            if let Some(better) = Octant::closest(
+                                *children.get(suboct),
+                                tree,
+                                focus,
+                                Some(best.unwrap_or(competitor))
+                            ) {
+                                best = Some(better);
+                            }
+                        }
+                    );
+
+                    best
+                } else {
+                    let focused_suboct: Option<SubOctant> = coord.suboctant(focus);
+
+                    let mut best: Option<BaseCoord> = focused_suboct
+                        .and_then(|suboct| Octant::closest(
+                            *children.get(suboct),
+                            tree,
+                            focus,
+                            None
+                        ));
+
+                    suboct_search_from(
+                        focused_suboct,
+                        false,
+                        |suboct| {
+                            if let Some(better) = Octant::closest(
+                                *children.get(suboct),
+                                tree,
+                                focus,
+                                best
+                            ) {
+                                best = Some(better);
+                            }
+                        }
+                    );
+
+                    best
+                }
+            }
+            Some(&Octant::Temp) => unreachable!()
+        }
+    }
+}
+
+struct OctDebug<'a, T: Debug> {
+    nodes: &'a [Octant<T>],
+    index: Option<usize>,
+}
+impl<'a, T: Debug> Debug for OctDebug<'a, T> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        if let Some(index) = self.index {
+            match &self.nodes[index] {
+                &Octant::Leaf {
+                    coord: ref coord,
+                    elems: ref elems,
+                    ..
+                } => {
+                    f.debug_struct("Leaf")
+                        .field("coord", coord)
+                        .field("elems", elems)
+                        .finish()
+                },
+                &Octant::Branch {
+                    coord: ref coord,
+                    children: ref children,
+                    ..
+                } => {
+                    f.debug_struct("Branch")
+                        .field("coord", coord)
+                        .field("children", &BranchChildrenDebug {
+                            nodes: self.nodes,
+                            children
+                        })
+                        .finish()
+                }
+                &Octant::Temp => {
+                    f.debug_struct("Temp")
+                        .finish()
+                }
+            }
+        } else {
+            f.debug_struct("Empty")
+                .finish()
+        }
+    }
+}
+
+struct BranchChildrenDebug<'a, T: Debug> {
+    nodes: &'a [Octant<T>],
+    children: &'a Children<Option<usize>>
+}
+impl<'a, T: Debug> Debug for BranchChildrenDebug<'a, T> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        f.debug_struct("Children")
+            .field("ppp", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::P, Pole::P, Pole::P])
+            })
+            .field("npp", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::N, Pole::P, Pole::P])
+            })
+            .field("pnp", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::P, Pole::N, Pole::P])
+            })
+            .field("ppn", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::P, Pole::P, Pole::N])
+            })
+            .field("pnn", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::P, Pole::N, Pole::N])
+            })
+            .field("npn", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::N, Pole::P, Pole::N])
+            })
+            .field("nnp", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::N, Pole::N, Pole::P])
+            })
+            .field("nnn", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::N, Pole::N, Pole::N])
+            })
+            .finish()
+    }
 }
 
 #[cfg(not(test))]
@@ -659,34 +787,21 @@ use rand::prng::XorShiftRng;
 use rand::{Rng, SeedableRng};
 
 fn main() {
-    let mut tree: Tree<i32> = Tree::new();
-
-    for x in 0..4 {
-        for y in 0..4 {
-            for z in 0..4 {
-                tree.add([x, y, z], ((x << 4) | (y << 2) | z) as i32);
-            }
-        }
-    }
-
-    println!("{:#?}", tree);
-
-    /*
-    let mut tree = Tree::new();
-    //let mut elems = Vec::new();
+    let mut tree: Tree<()> = Tree::new();
+    let mut elems: Vec<[u64; 3]> = Vec::new();
 
     let mut rng: XorShiftRng = SeedableRng::from_seed(
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
 
     let mut timer = Stopwatch::start_new();
 
-    for i in 0..100000 {
+    for i in 0..1000000 {
         let elem = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
         tree.add(elem, ());
         if i % 1000 == 0 {
             println!("inserting element i={}", i);
         }
-        //elems.push(elem);
+        elems.push(elem);
     }
 
     println!("inserted in {}s", timer.elapsed_ms() as f64 / 1000.0);
@@ -695,12 +810,10 @@ fn main() {
     let mut rng: XorShiftRng = SeedableRng::from_seed(
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
 
-    for i in 0..100000 {
+    for i in 0..1000000 {
         let focus = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
 
-
         let tree_closest: [u64; 3] = tree.closest(focus).unwrap().into();
-
         /*
         elems.sort_by_key(|&elem| BaseCoord::from(elem).manhattan_dist(focus.into()));
         let vec_closest = elems.iter().next().cloned().unwrap();
@@ -715,16 +828,18 @@ fn main() {
             eprintln!("vec closest = {:?}", vec_closest);
             eprintln!();
         } else {
-            println!("correct! (i={}, focus={:?})", i, focus);
+            //println!("correct! (i={}, focus={:?})", i, focus);
         }
         */
+        /*
         if i % 1000 == 0 {
             println!("queried! i={}", i);
         }
+        */
     }
 
     println!("queried in {}s", timer.elapsed_ms() as f64 / 1000.0);
 
     println!("done!");
-    */
+
 }
