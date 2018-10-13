@@ -16,6 +16,7 @@ use std::fmt::{Debug, Formatter};
 use std::fmt;
 use std::ptr;
 use std::ops::Not;
+use std::mem;
 
 use num::abs;
 use num::Integer;
@@ -102,7 +103,7 @@ impl Debug for OctCoord {
 
 /// Helper function for OctCoord::closest_suboctant
 fn closest_pole(oct_comp: u64, oct_scale: u8, base_comp: u64) -> Pole {
-    // Search for the determinant bit, going from big-endian to little-endian, but stopping at the
+    // search for the determinant bit, going from big-endian to little-endian, but stopping at the
     // bit with an endianness of oct_scale
     let max_bit = 0x1 << 63;
     let mut oct_comp = oct_comp << oct_scale;
@@ -287,306 +288,6 @@ impl<T> Children<T> {
     }
 }
 
-/// Ahe manhattan tree.
-#[derive(Debug)]
-pub struct Tree<T> {
-    root: Option<Octant<T>>
-}
-impl<T> Tree<T> {
-    pub fn new() -> Self {
-        Tree {
-            root: None
-        }
-    }
-
-    pub fn add(&mut self, coord: impl Into<BaseCoord>, elem: T) {
-        let coord = coord.into();
-        if let Some(ref mut root) = self.root {
-            root.add(coord, elem);
-        } else {
-            self.root = Some(Octant::leaf_of(coord, elem));
-        }
-    }
-
-    pub fn closest(&self, focus: impl Into<BaseCoord>) -> Option<BaseCoord> {
-        let focus = focus.into();
-        if let Some(ref root) = self.root {
-            root.closest(focus, None)
-        } else {
-            None
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.root.is_none()
-    }
-}
-
-/// An octant in the manhattan tree.
-#[derive(Debug)]
-enum Octant<T> {
-    Leaf {
-        coord: BaseCoord,
-        elems: SmallQueue<T>,
-    },
-    Branch {
-        coord: OctCoord,
-        children: Children<Box<Octant<T>>>,
-        bounds: CompBounds<u64>,
-    },
-    Empty,
-}
-impl<T> Octant<T> {
-    /// Create a leaf octant which contains a single element
-    fn leaf_of(coord: BaseCoord, elem: T) -> Self {
-        Octant::Leaf {
-            coord,
-            elems: SmallQueue::of(elem)
-        }
-    }
-
-    /// Does not assume that the coordinate is part of this octant's range.
-    /// Returns whether a new leaf was created
-    fn add(&mut self, elem_coord: BaseCoord, elem: T) -> bool {
-        // replace self through pattern matching
-        replace_and_get(self, |octant| match octant {
-            Octant::Leaf {
-                coord: leaf_coord,
-                elems: mut leaf_elems,
-            } => {
-                // case 1: we're a leaf
-                if leaf_coord == elem_coord {
-                    // case 1a: we've found matching coords
-
-                    // simply insert into queue
-                    leaf_elems.add(elem);
-
-                    // new leaf was directly not created
-                    (Octant::Leaf {
-                        coord: leaf_coord,
-                        elems: leaf_elems,
-                    }, false)
-                } else {
-                    // case 1b: the coords are non-identical
-                    // branch at the smallest common octant
-                    let branch_coord = elem_coord.lowest_common_octant(leaf_coord);
-
-                    let old_suboctant = branch_coord.suboctant(leaf_coord).unwrap();
-                    let old_child = Octant::Leaf {
-                        coord: leaf_coord,
-                        elems: leaf_elems
-                    };
-                    let mut old_child = Some(old_child);
-
-                    let new_suboctant = branch_coord.suboctant(elem_coord).unwrap();
-                    let new_child = Octant::leaf_of(elem_coord, elem);
-                    let mut new_child = Some(new_child);
-
-                    let children = Children::new(|suboctant| {
-                        if suboctant == old_suboctant {
-                            Box::new(old_child.take().unwrap())
-                        } else if suboctant == new_suboctant {
-                            Box::new(new_child.take().unwrap())
-                        } else {
-                            Box::new(Octant::Empty)
-                        }
-                    });
-
-                    let mut bounds = CompBounds::new();
-                    bounds.add(elem_coord);
-                    bounds.add(leaf_coord);
-
-                    // new leaf was directly created
-                    (Octant::Branch {
-                        coord: branch_coord,
-                        children,
-                        bounds,
-                    }, true)
-                }
-            },
-            Octant::Branch {
-                coord: branch_coord,
-                children: mut branch_children,
-                mut bounds,
-            } => {
-                // case 2: we're a branch
-                if let Some(child) = branch_coord.suboctant(elem_coord) {
-                    // case 2a: the new element is a child of this branch
-                    // simply add to the appropriate child
-                    let created = branch_children.get_mut(child).add(elem_coord, elem);
-                    // if the child created a leaf, add to bounds
-                    if created {
-                        bounds.add(elem_coord);
-                    }
-                    // pass whether leaf was created to parent
-                    (Octant::Branch {
-                        coord: branch_coord,
-                        children: branch_children,
-                        bounds
-                    }, created)
-                } else {
-                    // case 2b: the new element is not a child of this branch
-                    // in this case, we need to produce a new super branch
-
-                    let old_branch_coord = branch_coord;
-                    let new_branch_coord = old_branch_coord.to_base()
-                        .lowest_common_octant(elem_coord);
-
-                    // the new branch's bounds is a clone of the old branch's bounds, plus
-                    // the additional element
-                    let mut new_branch_bounds = bounds.clone();
-                    new_branch_bounds.add(elem_coord);
-
-                    let old_suboctant =
-                        new_branch_coord.suboctant(old_branch_coord.to_base()).unwrap();
-                    let old_child = Octant::Branch {
-                        coord: old_branch_coord,
-                        children: branch_children,
-                        bounds
-                    };
-                    let mut old_child = Some(old_child);
-
-                    let new_suboctant = new_branch_coord.suboctant(elem_coord).unwrap();
-                    let new_child = Octant::leaf_of(elem_coord, elem);
-                    let mut new_child = Some(new_child);
-
-                    let children = Children::new(|suboctant| {
-                        if suboctant == old_suboctant {
-                            Box::new(old_child.take().unwrap())
-                        } else if suboctant == new_suboctant {
-                            Box::new(new_child.take().unwrap())
-                        } else {
-                            Box::new(Octant::Empty)
-                        }
-                    });
-
-                    // a new leaf was created
-                    (Octant::Branch {
-                        coord: new_branch_coord,
-                        children,
-                        bounds: new_branch_bounds,
-                    }, true)
-                }
-            },
-            Octant::Empty => {
-                // case 3: we're empty
-                // simply become a single-element leaf
-                // which does of course create a new leaf
-                (Octant::leaf_of(elem_coord, elem), true)
-            }
-        })
-    }
-
-    /// If this octant is competing, it must not be focused.
-    fn closest(&self, focus: BaseCoord, competitor: Option<BaseCoord>) -> Option<BaseCoord> {
-        match self {
-            // the leaf case is simple: the closest element is the only element, but filter
-            // using the competitor manhattan distance
-            &Octant::Leaf {
-                coord,
-                ..
-            } => match competitor {
-                Some(competitor) if competitor.manhattan_dist(focus) <
-                    coord.manhattan_dist(focus) => None,
-                _ => Some(coord)
-            },
-            // the empty case is trivial: there is no element to be closest
-            &Octant::Empty => None,
-            // the branch case is more complex
-            &Octant::Branch {
-                coord,
-                ref children,
-                ref bounds,
-            } => {
-                if let Some(competitor) = competitor {
-                    // we're competing
-
-                    // if we're competing, sanity assert that we're not focused
-                    debug_assert!(coord.suboctant(focus).is_none());
-                    // we've asserted that we're not focused
-
-                    // short circuit if bounds determine that it's impossible to beat the competitor
-                    // manhattan distance
-                    let closest_suboct = coord.closest_suboctant(focus);
-                    // x axis short circuit
-                    if closest_suboct[0] == Pole::N {
-                        if (competitor.manhattan_dist(focus) as i64) <
-                            bounds.min_x().unwrap() as i64 - focus.comps[0] as i64 {
-                            return None;
-                        }
-                    } else {
-                        if (competitor.manhattan_dist(focus) as i64) <
-                            focus.comps[0] as i64 - bounds.max_x().unwrap() as i64 {
-                            return None;
-                        }
-                    }
-                    // y axis short circuit
-                    if closest_suboct[1] == Pole::N {
-                        if (competitor.manhattan_dist(focus) as i64) <
-                            bounds.min_y().unwrap() as i64 - focus.comps[1] as i64 {
-                            return None;
-                        }
-                    } else {
-                        if (competitor.manhattan_dist(focus) as i64) <
-                            focus.comps[1] as i64 - bounds.max_y().unwrap() as i64 {
-                            return None;
-                        }
-                    }
-                    // z axis short circuit
-                    if closest_suboct[2] == Pole::N {
-                        if (competitor.manhattan_dist(focus) as i64) <
-                            bounds.min_z().unwrap() as i64 - focus.comps[2] as i64 {
-                            return None;
-                        }
-                    } else {
-                        if (competitor.manhattan_dist(focus) as i64) <
-                            focus.comps[2] as i64 - bounds.max_z().unwrap() as i64 {
-                            return None;
-                        }
-                    }
-
-                    // search children for a better element than the competitor
-                    // branching out from, and including, the closest suboct
-                    let mut best: Option<BaseCoord> = None;
-                    suboct_search_from(Some(closest_suboct), true, |suboct| {
-                        if let Some(better) = children.get(suboct)
-                            .closest(focus, Some(best.unwrap_or(competitor))) {
-                            best = Some(better);
-                        }
-                    });
-
-                    // done
-                    best
-                } else {
-                    // we're main
-
-                    // attempt to get a closest element from a focused child
-                    // that will be our first find
-                    let focused_suboct: Option<SubOctant> = coord.suboctant(focus);
-
-                    let mut best: Option<BaseCoord> = focused_suboct
-                        .and_then(|suboct| children.get(suboct)
-                            .closest(focus, None));
-
-                    // then search outwards from the focused suboctant, competing against the best
-                    suboct_search_from(focused_suboct, false,|suboct| {
-                        if let Some(better) = children.get(suboct)
-                            .closest(focus, best) {
-
-                            best = Some(better);
-                        }
-                    });
-
-                    // best now holds this subtree's closest element, and the search has been
-                    // done efficiently
-                    best
-                }
-
-            }
-        }
-    }
-}
-
 fn suboct_search_from(start: Option<SubOctant>, include_start: bool, mut func: impl FnMut(SubOctant)) {
     if let Some(start) = start {
         if include_start {
@@ -617,6 +318,337 @@ fn suboct_search_from(start: Option<SubOctant>, include_start: bool, mut func: i
     }
 }
 
+pub struct Tree<T> {
+    nodes: Vec<Octant<T>>,
+    root: Option<usize>,
+}
+impl<T> Tree<T> {
+    pub fn new() -> Self {
+        Tree {
+            nodes: Vec::new(),
+            root: None
+        }
+    }
+
+    fn add_node(&mut self, node: Octant<T>) -> usize {
+        let i = self.nodes.len();
+        self.nodes.push(node);
+        i
+    }
+
+    fn clean(&mut self) {
+        // clean up nodes that have become temp with a series of swap_remove
+        // until we've scanned through the entire vec
+        let mut i = 0;
+        while i < self.nodes.len() {
+            // if the node has become temp, we should clean it up
+            if match &self.nodes[i] {
+                &Octant::Temp => true,
+                _ => false
+            } {
+                // swap_remove it
+                // however, this changes the position of the last node to i
+                self.nodes.swap_remove(i);
+                // get the parent and coord of the repositioned node
+                let (parent_i, child_coord) = match &self.nodes[i] {
+                    &Octant::Leaf {
+                        parent,
+                        coord,
+                        ..
+                    } => (parent, coord),
+                    &Octant::Branch {
+                        parent,
+                        coord,
+                        ..
+                    } => (parent, coord.to_base()),
+                    &Octant::Temp => {
+                        // but if the repositioned node is also temp, then repeat this same
+                        // iteration of the loop
+                        i -= 1;
+                        continue;
+                    }
+                };
+                if let Some(parent_i) = parent_i {
+                    // now we want to re-point the parent to to the child
+                    if let &mut Octant::Branch {
+                        coord: parent_coord,
+                        children: ref mut parent_children,
+                        ..
+                    } = &mut self.nodes[parent_i] {
+                        // we must us to determine which suboct the child is
+                        let suboctant = parent_coord.suboctant(child_coord).unwrap();
+                        // and then change the index of that child
+                        *parent_children.get_mut(suboctant) = Some(i);
+                    } else {
+                        // this branch means that the parent of a node was not a branch
+                        // which is illegal
+                        unreachable!()
+                    }
+                } else {
+                    // however, if we actually repositioned the root node, then we simply want
+                    // to update our root index
+                    self.root = Some(i);
+                }
+            }
+
+            i += 1;
+        }
+    }
+
+    pub fn add(&mut self, coord: impl Into<BaseCoord>, elem: T) {
+        let coord = coord.into();
+        let (new_root, _) = Octant::add(None, self.root, self, coord, elem);
+        self.root = Some(new_root);
+        self.clean();
+    }
+}
+
+impl<T: Debug> Debug for Tree<T> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        OctDebug {
+            nodes: &self.nodes,
+            index: self.root
+        }.fmt(f)
+    }
+}
+
+struct OctDebug<'a, T: Debug> {
+    nodes: &'a [Octant<T>],
+    index: Option<usize>,
+}
+impl<'a, T: Debug> Debug for OctDebug<'a, T> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        if let Some(index) = self.index {
+            match &self.nodes[index] {
+                &Octant::Leaf {
+                    coord: ref coord,
+                    elems: ref elems,
+                    ..
+                } => {
+                    f.debug_struct("Leaf")
+                        .field("coord", coord)
+                        .field("elems", elems)
+                        .finish()
+                },
+                &Octant::Branch {
+                    coord: ref coord,
+                    children: ref children,
+                    ..
+                } => {
+                    f.debug_struct("Branch")
+                        .field("coord", coord)
+                        .field("children", &BranchChildrenDebug {
+                            nodes: self.nodes,
+                            children
+                        })
+                        .finish()
+                }
+                &Octant::Temp => {
+                    f.debug_struct("Temp")
+                        .finish()
+                }
+            }
+        } else {
+            f.debug_struct("Empty")
+                .finish()
+        }
+    }
+}
+
+struct BranchChildrenDebug<'a, T: Debug> {
+    nodes: &'a [Octant<T>],
+    children: &'a Children<Option<usize>>
+}
+impl<'a, T: Debug> Debug for BranchChildrenDebug<'a, T> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        f.debug_struct("Children")
+            .field("ppp", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::P, Pole::P, Pole::P])
+            })
+            .field("npp", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::N, Pole::P, Pole::P])
+            })
+            .field("pnp", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::P, Pole::N, Pole::P])
+            })
+            .field("ppn", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::P, Pole::P, Pole::N])
+            })
+            .field("pnn", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::P, Pole::N, Pole::N])
+            })
+            .field("npn", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::N, Pole::P, Pole::N])
+            })
+            .field("nnp", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::N, Pole::N, Pole::P])
+            })
+            .field("nnn", &OctDebug {
+                nodes: self.nodes,
+                index: *self.children.get([Pole::N, Pole::N, Pole::N])
+            })
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+enum Octant<T> {
+    Leaf {
+        coord: BaseCoord,
+        elems: SmallQueue<T>,
+        parent: Option<usize>,
+    },
+    Branch {
+        coord: OctCoord,
+        children: Children<Option<usize>>,
+        bounds: CompBounds<u64>,
+        parent: Option<usize>,
+    },
+    Temp,
+}
+impl<T> Octant<T> {
+    fn leaf_of(parent: Option<usize>, coord: BaseCoord, elem: T) -> Self {
+        Octant::Leaf {
+            coord,
+            elems: SmallQueue::of(elem),
+            parent,
+        }
+    }
+
+    fn add(this_parent: Option<usize>, this_i: Option<usize>, tree: &mut Tree<T>, elem_coord: BaseCoord, elem: T) -> (usize, bool) {
+        let (this, this_i) = match this_i {
+            Some(i) => (Some(mem::replace(&mut tree.nodes[i], Octant::Temp)), i),
+            None => (None, tree.add_node(Octant::Temp))
+        };
+        let (this, created) = match this {
+            None => {
+                (Octant::leaf_of(this_parent, elem_coord, elem), true)
+            },
+            Some(Octant::Leaf {
+                coord: leaf_coord,
+                elems: mut leaf_elems,
+                parent: _,
+            }) => {
+                if leaf_coord == elem_coord {
+                    leaf_elems.add(elem);
+                    (Octant::Leaf {
+                        parent: this_parent,
+                        coord: leaf_coord,
+                        elems: leaf_elems,
+                    }, false)
+                } else {
+                    let branch_coord = elem_coord.lowest_common_octant(leaf_coord);
+
+                    let old_suboctant = branch_coord.suboctant(leaf_coord).unwrap();
+                    let old_child = Octant::Leaf {
+                        parent: Some(this_i),
+                        coord: leaf_coord,
+                        elems: leaf_elems,
+                    };
+                    let old_child = tree.add_node(old_child);
+
+                    let new_suboctant = branch_coord.suboctant(elem_coord).unwrap();
+                    let new_child = Octant::leaf_of(Some(this_i), elem_coord, elem);
+                    let new_child = tree.add_node(new_child);
+
+                    let children = Children::new(|suboctant| {
+                        if suboctant == old_suboctant {
+                            Some(old_child)
+                        } else if suboctant == new_suboctant {
+                            Some(new_child)
+                        } else {
+                            None
+                        }
+                    });
+
+                    let mut bounds = CompBounds::new();
+                    bounds.add(elem_coord);
+                    bounds.add(leaf_coord);
+
+                    (Octant::Branch {
+                        coord: branch_coord,
+                        children,
+                        bounds,
+                        parent: this_parent,
+                    }, true)
+                }
+            },
+            Some(Octant::Branch {
+                coord: branch_coord,
+                children: mut branch_children,
+                mut bounds,
+                parent: _,
+            }) => {
+                if let Some(child_suboctant) = branch_coord.suboctant(elem_coord) {
+                    let (new_child, created) =
+                        Octant::add(Some(this_i), *branch_children.get(child_suboctant), tree, elem_coord, elem);
+                    *branch_children.get_mut(child_suboctant) = Some(new_child);
+                    if created {
+                        bounds.add(elem_coord);
+                    }
+                    (Octant::Branch {
+                        coord: branch_coord,
+                        children: branch_children,
+                        bounds,
+                        parent: this_parent,
+                    }, created)
+                } else {
+                    let old_branch_coord = branch_coord;
+                    let new_branch_coord = old_branch_coord.to_base()
+                        .lowest_common_octant(elem_coord);
+
+                    let mut new_branch_bounds = bounds.clone(); // TODO: this is damn expensive
+                    new_branch_bounds.add(elem_coord);
+
+                    let old_suboctant =
+                        new_branch_coord.suboctant(old_branch_coord.to_base()).unwrap();
+                    let old_child = Octant::Branch {
+                        coord: old_branch_coord,
+                        children: branch_children,
+                        bounds,
+                        parent: Some(this_i),
+                    };
+                    let old_child = tree.add_node(old_child);
+
+                    let new_suboctant = new_branch_coord.suboctant(elem_coord).unwrap();
+                    let new_child = Octant::leaf_of(Some(this_i), elem_coord, elem);
+                    let new_child = tree.add_node(new_child);
+
+                    let children = Children::new(|suboctant| {
+                        if suboctant == old_suboctant {
+                            Some(old_child)
+                        } else if (suboctant == new_suboctant) {
+                            Some(new_child)
+                        } else {
+                            None
+                        }
+                    });
+
+                    (Octant::Branch {
+                        coord: new_branch_coord,
+                        children,
+                        bounds: new_branch_bounds,
+                        parent: this_parent,
+                    }, true)
+                }
+            },
+            Some(Octant::Temp) => unreachable!()
+        };
+
+        mem::replace(&mut tree.nodes[this_i], this);
+        (this_i, created)
+    }
+
+
+}
+
 #[cfg(not(test))]
 extern crate rand;
 extern crate stopwatch;
@@ -627,6 +659,19 @@ use rand::prng::XorShiftRng;
 use rand::{Rng, SeedableRng};
 
 fn main() {
+    let mut tree: Tree<i32> = Tree::new();
+
+    for x in 0..4 {
+        for y in 0..4 {
+            for z in 0..4 {
+                tree.add([x, y, z], ((x << 4) | (y << 2) | z) as i32);
+            }
+        }
+    }
+
+    println!("{:#?}", tree);
+
+    /*
     let mut tree = Tree::new();
     //let mut elems = Vec::new();
 
@@ -681,4 +726,5 @@ fn main() {
     println!("queried in {}s", timer.elapsed_ms() as f64 / 1000.0);
 
     println!("done!");
+    */
 }
