@@ -5,10 +5,10 @@ extern crate num;
 
 #[cfg(test)]
 mod test;
-mod bounds;
+//mod bounds;
 mod smallqueue;
 
-use bounds::CompBounds;
+//use bounds::CompBounds;
 use smallqueue::SmallQueue;
 
 use std::cmp::{min, max};
@@ -17,6 +17,7 @@ use std::fmt;
 use std::ptr;
 use std::ops::Not;
 use std::mem;
+use std::u64;
 
 use num::abs;
 use num::Integer;
@@ -318,6 +319,43 @@ fn suboct_search_from(start: Option<SubOctant>, include_start: bool, mut func: i
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+struct CompBounds {
+    pub min: [u64; 3],
+    pub max: [u64; 3],
+}
+impl CompBounds {
+    pub fn of(comps: impl Into<[u64; 3]>) -> Self {
+        let comps = comps.into();
+        CompBounds {
+            min: comps,
+            max: comps,
+        }
+    }
+
+    pub fn combine(bounds: &[CompBounds]) -> Self {
+        let mut min = [u64::MAX; 3];
+        let mut max = [u64::MIN; 3];
+        for &CompBounds {
+            min: ref elem_min,
+            max: ref elem_max,
+        } in bounds.iter() {
+            for i in 0..3 {
+                if elem_min[i] < min[i] {
+                    min[i] = elem_min[i];
+                }
+                if elem_max[i] > max[i] {
+                    max[i] = elem_max[i];
+                }
+            }
+        }
+        CompBounds {
+            min,
+            max,
+        }
+    }
+}
+
 pub struct Tree<T> {
     nodes: Vec<Octant<T>>,
     root: Option<usize>,
@@ -338,7 +376,7 @@ impl<T> Tree<T> {
 
     pub fn add(&mut self, coord: impl Into<BaseCoord>, elem: T) {
         let coord = coord.into();
-        let (new_root, _) = Octant::add(None, self.root, self, coord, elem);
+        let new_root = Octant::add(None, self.root, self, coord, elem);
         self.root = Some(new_root);
         //self.clean();
     }
@@ -424,9 +462,6 @@ impl<T: Debug> Debug for Tree<T> {
     }
 }
 
-
-
-#[derive(Debug)]
 enum Octant<T> {
     Leaf {
         coord: BaseCoord,
@@ -436,13 +471,13 @@ enum Octant<T> {
     Branch {
         coord: OctCoord,
         children: Children<Option<usize>>,
-        bounds: CompBounds<u64>,
+        bounds: CompBounds,
         parent: Option<usize>,
     },
     Temp,
 }
 impl<T> Octant<T> {
-    fn leaf_of(parent: Option<usize>, coord: BaseCoord, elem: T) -> Self {
+    fn new_leaf(parent: Option<usize>, coord: BaseCoord, elem: T) -> Self {
         Octant::Leaf {
             coord,
             elems: SmallQueue::of(elem),
@@ -450,14 +485,48 @@ impl<T> Octant<T> {
         }
     }
 
-    fn add(this_parent: Option<usize>, this_i: Option<usize>, tree: &mut Tree<T>, elem_coord: BaseCoord, elem: T) -> (usize, bool) {
+    fn new_branch(tree: &Tree<T>, coord: OctCoord, children: Children<Option<usize>>, parent: Option<usize>) -> Self {
+        let mut bounds_elems = Vec::new(); // TODO: smalllvec!
+        for &x in [Pole::N, Pole::P].iter() {
+            for &y in [Pole::N, Pole::P].iter() {
+                for &z in [Pole::N, Pole::P].iter() {
+                    if let Some(bound_elem) = Octant::bounds(tree, *children.get([x, y, z])) {
+                        bounds_elems.push(bound_elem);
+                    }
+                }
+            }
+        }
+        let bounds = CompBounds::combine(&bounds_elems);
+        Octant::Branch {
+            coord,
+            children,
+            bounds,
+            parent,
+        }
+    }
+
+    fn bounds(tree: &Tree<T>, this_i: Option<usize>) -> Option<CompBounds> {
+        match this_i.map(|i| &tree.nodes[i]) {
+            Some(&Octant::Leaf {
+                coord,
+                ..
+            }) => Some(CompBounds::of(coord)),
+            Some(&Octant::Branch {
+                bounds,
+                ..
+            }) => Some(bounds),
+            Some(&Octant::Temp) | None => None,
+        }
+    }
+
+    fn add(this_parent: Option<usize>, this_i: Option<usize>, tree: &mut Tree<T>, elem_coord: BaseCoord, elem: T) -> usize {
         let (this, this_i) = match this_i {
             Some(i) => (Some(mem::replace(&mut tree.nodes[i], Octant::Temp)), i),
             None => (None, tree.add_node(Octant::Temp))
         };
-        let (this, created) = match this {
+        let this = match this {
             None => {
-                (Octant::leaf_of(this_parent, elem_coord, elem), true)
+                Octant::new_leaf(this_parent, elem_coord, elem)
             },
             Some(Octant::Leaf {
                 coord: leaf_coord,
@@ -466,11 +535,11 @@ impl<T> Octant<T> {
             }) => {
                 if leaf_coord == elem_coord {
                     leaf_elems.add(elem);
-                    (Octant::Leaf {
+                    Octant::Leaf {
                         parent: this_parent,
                         coord: leaf_coord,
                         elems: leaf_elems,
-                    }, false)
+                    }
                 } else {
                     let branch_coord = elem_coord.lowest_common_octant(leaf_coord);
 
@@ -483,7 +552,7 @@ impl<T> Octant<T> {
                     let old_child = tree.add_node(old_child);
 
                     let new_suboctant = branch_coord.suboctant(elem_coord).unwrap();
-                    let new_child = Octant::leaf_of(Some(this_i), elem_coord, elem);
+                    let new_child = Octant::new_leaf(Some(this_i), elem_coord, elem);
                     let new_child = tree.add_node(new_child);
 
                     let children = Children::new(|suboctant| {
@@ -496,16 +565,17 @@ impl<T> Octant<T> {
                         }
                     });
 
-                    let mut bounds = CompBounds::new();
-                    bounds.add(elem_coord);
-                    bounds.add(leaf_coord);
+                    let bounds = CompBounds::combine(&[CompBounds::of(elem_coord), CompBounds::of(leaf_coord)]);
 
-                    (Octant::Branch {
+                    /*
+                    Octant::Branch {
                         coord: branch_coord,
                         children,
                         bounds,
                         parent: this_parent,
-                    }, true)
+                    }
+                    */
+                    Octant::new_branch(tree, branch_coord, children, this_parent)
                 }
             },
             Some(Octant::Branch {
@@ -515,38 +585,49 @@ impl<T> Octant<T> {
                 parent: _,
             }) => {
                 if let Some(child_suboctant) = branch_coord.suboctant(elem_coord) {
-                    let (new_child, created) =
-                        Octant::add(Some(this_i), *branch_children.get(child_suboctant), tree, elem_coord, elem);
+                    let new_child = Octant::add(
+                        Some(this_i),
+                        *branch_children.get(child_suboctant), tree, elem_coord, elem);
                     *branch_children.get_mut(child_suboctant) = Some(new_child);
+                    /*
                     if created {
                         bounds.add(elem_coord);
                     }
+                    */
+                    /*
                     (Octant::Branch {
                         coord: branch_coord,
                         children: branch_children,
                         bounds,
                         parent: this_parent,
                     }, created)
+                    */
+                    Octant::new_branch(tree, branch_coord, branch_children, this_parent)
                 } else {
                     let old_branch_coord = branch_coord;
                     let new_branch_coord = old_branch_coord.to_base()
                         .lowest_common_octant(elem_coord);
 
+                    /*
                     let mut new_branch_bounds = bounds.clone(); // TODO: this is damn expensive
                     new_branch_bounds.add(elem_coord);
+                    */
 
                     let old_suboctant =
                         new_branch_coord.suboctant(old_branch_coord.to_base()).unwrap();
+                    /*
                     let old_child = Octant::Branch {
                         coord: old_branch_coord,
                         children: branch_children,
                         bounds,
                         parent: Some(this_i),
                     };
+                    */
+                    let old_child = Octant::new_branch(tree, old_branch_coord, branch_children, Some(this_i));
                     let old_child = tree.add_node(old_child);
 
                     let new_suboctant = new_branch_coord.suboctant(elem_coord).unwrap();
-                    let new_child = Octant::leaf_of(Some(this_i), elem_coord, elem);
+                    let new_child = Octant::new_leaf(Some(this_i), elem_coord, elem);
                     let new_child = tree.add_node(new_child);
 
                     let children = Children::new(|suboctant| {
@@ -559,19 +640,22 @@ impl<T> Octant<T> {
                         }
                     });
 
-                    (Octant::Branch {
+                    /*
+                    Octant::Branch {
                         coord: new_branch_coord,
                         children,
                         bounds: new_branch_bounds,
                         parent: this_parent,
-                    }, true)
+                    }
+                    */
+                    Octant::new_branch(tree, new_branch_coord, children, this_parent)
                 }
             },
             Some(Octant::Temp) => unreachable!()
         };
 
         mem::replace(&mut tree.nodes[this_i], this);
-        (this_i, created)
+        this_i
     }
 
     fn closest(this_i: Option<usize>, tree: &Tree<T>, focus: BaseCoord, competitor: Option<BaseCoord>) -> Option<BaseCoord> {
@@ -606,36 +690,36 @@ impl<T> Octant<T> {
                     // x axis short circuit
                     if closest_suboct[0] == Pole::N {
                         if (competitor.manhattan_dist(focus) as i64) <
-                            bounds.min_x().unwrap() as i64 - focus.comps[0] as i64 {
+                            bounds.min[0] as i64 - focus.comps[0] as i64 {
                             return None;
                         }
                     } else {
                         if (competitor.manhattan_dist(focus) as i64) <
-                            focus.comps[0] as i64 - bounds.max_x().unwrap() as i64 {
+                            focus.comps[0] as i64 - bounds.max[0] as i64 {
                             return None;
                         }
                     }
                     // y axis short circuit
                     if closest_suboct[1] == Pole::N {
                         if (competitor.manhattan_dist(focus) as i64) <
-                            bounds.min_y().unwrap() as i64 - focus.comps[1] as i64 {
+                            bounds.min[1] as i64 - focus.comps[1] as i64 {
                             return None;
                         }
                     } else {
                         if (competitor.manhattan_dist(focus) as i64) <
-                            focus.comps[1] as i64 - bounds.max_y().unwrap() as i64 {
+                            focus.comps[1] as i64 - bounds.max[1] as i64 {
                             return None;
                         }
                     }
                     // z axis short circuit
                     if closest_suboct[2] == Pole::N {
                         if (competitor.manhattan_dist(focus) as i64) <
-                            bounds.min_z().unwrap() as i64 - focus.comps[2] as i64 {
+                            bounds.min[2] as i64 - focus.comps[2] as i64 {
                             return None;
                         }
                     } else {
                         if (competitor.manhattan_dist(focus) as i64) <
-                            focus.comps[2] as i64 - bounds.max_z().unwrap() as i64 {
+                            focus.comps[2] as i64 - bounds.max[2] as i64 {
                             return None;
                         }
                     }
@@ -799,9 +883,9 @@ fn main() {
         let elem = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
         tree.add(elem, ());
         if i % 1000 == 0 {
-            println!("inserting element i={}", i);
+            //println!("inserting element i={}", i);
         }
-        elems.push(elem);
+        //elems.push(elem);
     }
 
     println!("inserted in {}s", timer.elapsed_ms() as f64 / 1000.0);
@@ -814,6 +898,7 @@ fn main() {
         let focus = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
 
         let tree_closest: [u64; 3] = tree.closest(focus).unwrap().into();
+
         /*
         elems.sort_by_key(|&elem| BaseCoord::from(elem).manhattan_dist(focus.into()));
         let vec_closest = elems.iter().next().cloned().unwrap();
@@ -831,11 +916,10 @@ fn main() {
             //println!("correct! (i={}, focus={:?})", i, focus);
         }
         */
-        /*
+
         if i % 1000 == 0 {
-            println!("queried! i={}", i);
+            //println!("queried! i={}", i);
         }
-        */
     }
 
     println!("queried in {}s", timer.elapsed_ms() as f64 / 1000.0);
