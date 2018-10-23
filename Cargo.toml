@@ -4,9 +4,9 @@ version = "0.1.0"
 authors = ["Phoenix <kahlo.phoenix@gmail.com>"]
 
 [dependencies]
+bonzai = { path = "../bonzai" }
 num = "0.2.0"
-take_mut = "0.2.2"
+
+[dev-dependencies]
 rand = "0.5.5"
-
 stopwatch = "0.0.7"
-

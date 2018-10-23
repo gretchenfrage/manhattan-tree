@@ -565,7 +565,7 @@ impl<T> Octant<T> {
                         }
                     });
 
-                    let bounds = CompBounds::combine(&[CompBounds::of(elem_coord), CompBounds::of(leaf_coord)]);
+                    //let bounds = CompBounds::combine(&[CompBounds::of(elem_coord), CompBounds::of(leaf_coord)]);
 
                     /*
                     Octant::Branch {
@@ -581,8 +581,7 @@ impl<T> Octant<T> {
             Some(Octant::Branch {
                 coord: branch_coord,
                 children: mut branch_children,
-                mut bounds,
-                parent: _,
+                ..
             }) => {
                 if let Some(child_suboctant) = branch_coord.suboctant(elem_coord) {
                     let new_child = Octant::add(
@@ -633,7 +632,7 @@ impl<T> Octant<T> {
                     let children = Children::new(|suboctant| {
                         if suboctant == old_suboctant {
                             Some(old_child)
-                        } else if (suboctant == new_suboctant) {
+                        } else if suboctant == new_suboctant {
                             Some(new_child)
                         } else {
                             None
@@ -784,8 +783,8 @@ impl<'a, T: Debug> Debug for OctDebug<'a, T> {
         if let Some(index) = self.index {
             match &self.nodes[index] {
                 &Octant::Leaf {
-                    coord: ref coord,
-                    elems: ref elems,
+                    ref coord,
+                    ref elems,
                     ..
                 } => {
                     f.debug_struct("Leaf")
@@ -794,8 +793,8 @@ impl<'a, T: Debug> Debug for OctDebug<'a, T> {
                         .finish()
                 },
                 &Octant::Branch {
-                    coord: ref coord,
-                    children: ref children,
+                    ref coord,
+                    ref children,
                     ..
                 } => {
                     f.debug_struct("Branch")
@@ -872,7 +871,7 @@ use rand::{Rng, SeedableRng};
 
 fn main() {
     let mut tree: Tree<()> = Tree::new();
-    let mut elems: Vec<[u64; 3]> = Vec::new();
+    //let mut elems: Vec<[u64; 3]> = Vec::new();
 
     let mut rng: XorShiftRng = SeedableRng::from_seed(
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
@@ -897,7 +896,7 @@ fn main() {
     for i in 0..1000000 {
         let focus = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
 
-        let tree_closest: [u64; 3] = tree.closest(focus).unwrap().into();
+        let _tree_closest: [u64; 3] = tree.closest(focus).unwrap().into();
 
         /*
         elems.sort_by_key(|&elem| BaseCoord::from(elem).manhattan_dist(focus.into()));
