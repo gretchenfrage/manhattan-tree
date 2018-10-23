@@ -1,5 +1,5 @@
 
-use super::{replace, replace_and_get};
+use transform::{replace, replace_and_get};
 
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
@@ -12,6 +12,7 @@ pub struct SmallQueue<T> {
     state: SmallQueueState<T>
 }
 impl<T> SmallQueue<T> {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         SmallQueue {
             state: SmallQueueState::Zero
