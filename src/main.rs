@@ -13,17 +13,188 @@ mod bounds;
 
 use smallqueue::SmallQueue;
 use coord::*;
-use children::*;
 use bounds::*;
-
-use std::fmt::{Debug, Formatter};
-use std::fmt;
-use std::mem;
-use std::u64;
+use transform::*;
 
 use bonzai::*;
 
+#[derive(Debug)]
+pub struct Octree<T> {
+    tree: Tree<Octant<T>, [ChildId; 8]>
+}
+impl<T> Octree<T> {
+    pub fn new() -> Self {
+        Octree {
+            tree: Tree::new()
+        }
+    }
 
+    pub fn add(&mut self, coord: impl Into<BaseCoord>, elem: T) {
+        let coord = coord.into();
+        let op = self.tree.operation();
+        if let Some(mut root) = op.write_root() {
+            let (octant, children) = root.split();
+            octant.add(children, coord, elem);
+        } else {
+            op.put_root_elem(Octant::leaf_of(coord, elem));
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Octant<T> {
+    Leaf {
+        coord: BaseCoord,
+        elems: SmallQueue<T>,
+    },
+    Branch {
+        coord: OctCoord,
+        bounds: CompBounds,
+    },
+}
+impl<T> Octant<T> {
+    fn add(&mut self, mut children: ChildWriteGuard<Octant<T>, [ChildId; 8]>, elem_coord: BaseCoord, elem: T) {
+        replace(self, |octant| match octant {
+            Octant::Leaf {
+                coord: leaf_coord,
+                elems: mut leaf_elems,
+            } => {
+                // case 1: we are a leaf
+                if leaf_coord == elem_coord {
+                    // case 1a: we've found mathcing coords
+                    // simply insert into queue
+                    leaf_elems.add(elem);
+
+                    Octant::Leaf {
+                        coord: leaf_coord,
+                        elems: leaf_elems,
+                    }
+                } else {
+                    // case 1b: the coords are non-identical
+                    // branch at the smallest common octant
+                    let branch_coord = elem_coord.lowest_common_octant(leaf_coord);
+
+                    let old_suboctant = branch_coord.suboctant(leaf_coord).unwrap();
+                    let old_child = Octant::Leaf {
+                        coord: leaf_coord,
+                        elems: leaf_elems,
+                    };
+
+                    let new_suboctant = branch_coord.suboctant(elem_coord).unwrap();
+                    let new_child = Octant::leaf_of(elem_coord, elem);
+
+                    let branch_bounds = CompBounds::combine(&[
+                        CompBounds::of(elem_coord),
+                        CompBounds::of(leaf_coord),
+                    ]);
+
+                    children.put_child_elem(
+                        old_suboctant.to_index(),
+                        old_child,
+                    ).unwrap();
+                    children.put_child_elem(
+                        new_suboctant.to_index(),
+                        new_child,
+                    ).unwrap();
+
+                    Octant::Branch {
+                        coord: branch_coord,
+                        bounds: branch_bounds,
+                    }
+                }
+            },
+            Octant::Branch {
+                coord: branch_coord,
+                bounds: branch_bounds,
+            } => {
+                // case 2: we're a branch
+                if let Some(child) = branch_coord.suboctant(elem_coord) {
+                    // case 2a: the new element is a child of this branch
+                    // simply add to the appropriate child, or create a child
+                    if let Some(mut child) = children
+                        .write_child(child.to_index())
+                        .unwrap() {
+                        let (child_octant, subchildren) = child.split();
+                        child_octant.add(subchildren, elem_coord, elem);
+                    } else {
+                        children.put_child_elem(child.to_index(),
+                                                Octant::leaf_of(elem_coord, elem))
+                            .unwrap();
+                    }
+
+                    // the new bounds can only be more extreme than the current bounds
+                    let new_bounds = CompBounds::combine(&[
+                        branch_bounds,
+                        CompBounds::of(elem_coord)
+                    ]);
+
+                    Octant::Branch {
+                        coord: branch_coord,
+                        bounds: new_bounds,
+                    }
+                } else {
+                    // case 2b: the new element is not a child of this branch
+                    // in this case, we need to produce a new super branch
+
+                    let old_branch_coord = branch_coord;
+                    let new_branch_coord = old_branch_coord.to_base()
+                        .lowest_common_octant(elem_coord);
+
+                    // the new bounds can only be more extreme than the current bounds
+                    let old_branch_bounds = branch_bounds;
+                    let new_branch_bounds = CompBounds::combine(&[
+                        old_branch_bounds,
+                        CompBounds::of(elem_coord)
+                    ]);
+
+                    // create the old branch as a detached node
+                    let mut old_branch = children.op.new_detached(Octant::Branch {
+                        coord: old_branch_coord,
+                        bounds: old_branch_bounds,
+                    });
+
+                    // transfer all current children to the detached "old branch" node
+                    {
+                        let mut old_branch_children = old_branch.children();
+                        for branch_index in 0..8 {
+                            if let Some(child) = children.take_child(branch_index).unwrap() {
+                                old_branch_children.put_child_tree(branch_index, child).unwrap();
+                            }
+                        }
+                    }
+
+                    // the other child of the new branch will be a neaf leaf
+                    // which will contain this here elem
+                    let new_leaf = Octant::leaf_of(elem_coord, elem);
+
+                    // now, attach the old branch and the new leaf as children of the new branch (self)
+                    let old_suboctant = new_branch_coord
+                        .suboctant(old_branch_coord.to_base()).unwrap();
+                    children.put_child_tree(old_suboctant.to_index(), old_branch).unwrap();
+
+                    let new_suboctant = new_branch_coord
+                        .suboctant(elem_coord).unwrap();
+                    children.put_child_elem(new_suboctant.to_index(), new_leaf).unwrap();
+
+                    // and finally, become the new branch
+                    Octant::Branch {
+                        coord: new_branch_coord,
+                        bounds: new_branch_bounds,
+                    }
+                }
+            }
+        })
+    }
+
+    fn leaf_of(coord: BaseCoord, elem: T) -> Self {
+        Octant::Leaf {
+            coord,
+            elems: SmallQueue::of(elem),
+        }
+    }
+}
+
+/*
 pub struct Tree<T> {
     nodes: Vec<Octant<T>>,
     root: Option<usize>,
@@ -527,7 +698,9 @@ impl<'a, T: Debug> Debug for BranchChildrenDebug<'a, T> {
             .finish()
     }
 }
+*/
 
+/*
 #[cfg(not(test))]
 extern crate rand;
 extern crate stopwatch;
@@ -536,8 +709,21 @@ use stopwatch::Stopwatch;
 
 use rand::prng::XorShiftRng;
 use rand::{Rng, SeedableRng};
+*/
 
 fn main() {
+    let mut tree: Octree<u64> = Octree::new();
+
+    //tree.add([0, 0, 0], 0);
+    //tree.add([2, 2, 2], 2);
+    for n in 0..20 {
+        tree.add([n, n, n], n);
+    }
+
+    println!("{:#?}", tree);
+
+
+    /*
     let mut tree: Tree<()> = Tree::new();
     //let mut elems: Vec<[u64; 3]> = Vec::new();
 
@@ -593,4 +779,5 @@ fn main() {
 
     println!("done!");
 
+*/
 }

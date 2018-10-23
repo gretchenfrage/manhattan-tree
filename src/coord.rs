@@ -39,7 +39,7 @@ impl OctCoord {
             let x = Pole::from_bit((coord.comps[0] >> (self.scale - 1)) & 0x1).unwrap();
             let y = Pole::from_bit((coord.comps[1] >> (self.scale - 1)) & 0x1).unwrap();
             let z = Pole::from_bit((coord.comps[2] >> (self.scale - 1)) & 0x1).unwrap();
-            Some([x, y, z])
+            Some(SubOctant::new([x, y, z]))
         }
     }
 
@@ -56,7 +56,7 @@ impl OctCoord {
         let x = closest_pole(self.base.comps[0], self.scale, coord.comps[0]);
         let y = closest_pole(self.base.comps[1], self.scale, coord.comps[1]);
         let z = closest_pole(self.base.comps[2], self.scale, coord.comps[2]);
-        [x, y, z]
+        SubOctant::new([x, y, z])
     }
 }
 impl Debug for OctCoord {
