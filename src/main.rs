@@ -13,6 +13,7 @@ mod bounds;
 
 use smallqueue::SmallQueue;
 use coord::*;
+use children::*;
 use bounds::*;
 use transform::*;
 
@@ -33,12 +34,43 @@ impl<T> Octree<T> {
         let coord = coord.into();
         let op = self.tree.operation();
         if let Some(mut root) = op.write_root() {
-            let (octant, children) = root.split();
+            let (octant, children) = root.into_split();
             octant.add(children, coord, elem);
         } else {
             op.put_root_elem(Octant::leaf_of(coord, elem));
         }
     }
+
+    fn closest_key(&mut self, focus: impl Into<BaseCoord>) -> Option<[u64; 3]> {
+        let focus = focus.into();
+        let op = self.tree.operation();
+        if let Some(mut root) = op.write_root() {
+            match Octant::find_closest(root, focus, None).unwrap().elem() {
+                &mut Octant::Leaf {
+                    coord,
+                    ..
+                } => Some(coord.comps),
+                &mut Octant::Branch {
+                    ..
+                } => unreachable!()
+            }
+        } else {
+            None
+        }
+    }
+
+    /*
+    pub fn remove_closest(&mut self, focus: impl Into<BaseCoord>) -> Option<T> {
+        let focus = focus.into();
+        let op = self.tree.operation();
+        if let Some(mut root) = op.write_root() {
+            //Octant::remove_closest(root, coord)
+            unimplemented!()
+        } else {
+            None
+        }
+    }
+    */
 }
 
 #[derive(Debug)]
@@ -53,6 +85,13 @@ enum Octant<T> {
     },
 }
 impl<T> Octant<T> {
+    fn leaf_of(coord: BaseCoord, elem: T) -> Self {
+        Octant::Leaf {
+            coord,
+            elems: SmallQueue::of(elem),
+        }
+    }
+
     fn add(&mut self, mut children: ChildWriteGuard<Octant<T>, [ChildId; 8]>, elem_coord: BaseCoord, elem: T) {
         replace(self, |octant| match octant {
             Octant::Leaf {
@@ -112,9 +151,9 @@ impl<T> Octant<T> {
                     // case 2a: the new element is a child of this branch
                     // simply add to the appropriate child, or create a child
                     if let Some(mut child) = children
-                        .write_child(child.to_index())
+                        .borrow_child_write(child.to_index())
                         .unwrap() {
-                        let (child_octant, subchildren) = child.split();
+                        let (child_octant, subchildren) = child.into_split();
                         child_octant.add(subchildren, elem_coord, elem);
                     } else {
                         children.put_child_elem(child.to_index(),
@@ -163,7 +202,7 @@ impl<T> Octant<T> {
                         }
                     }
 
-                    // the other child of the new branch will be a neaf leaf
+                    // the other child of the new branch will be a leaf
                     // which will contain this here elem
                     let new_leaf = Octant::leaf_of(elem_coord, elem);
 
@@ -186,13 +225,228 @@ impl<T> Octant<T> {
         })
     }
 
-    fn leaf_of(coord: BaseCoord, elem: T) -> Self {
-        Octant::Leaf {
-            coord,
-            elems: SmallQueue::of(elem),
+    fn find_closest<'tree, 'node>(mut this_guard: NodeWriteGuard<'tree, 'node, Octant<T>, [ChildId; 8]>,
+                                  focus: BaseCoord, competitor: Option<BaseCoord>)
+        -> Option<NodeWriteGuard<'tree, 'node, Octant<T>, [ChildId; 8]>> {
+
+        if let Some(leaf_coord) = match this_guard.elem() {
+            &mut Octant::Leaf {
+                coord,
+                ..
+            } => Some(coord),
+            &mut Octant::Branch { .. } => None,
+        } {
+            // case 1: we're a leaf
+            // the closest element is the only element, but it may or may not be better than the
+            // competitor manhattan distance
+            if let Some(competitor) = competitor {
+                if competitor.manhattan_dist(focus) < leaf_coord.manhattan_dist(focus) {
+                    None
+                } else {
+                    Some(this_guard)
+                }
+            } else {
+                Some(this_guard)
+            }
+        } else {
+            // case 2: we're a branch
+            let (this_node, mut children) = this_guard.into_split();
+            let closest: Option<NodeWriteGuard<'tree, 'node, Octant<T>, [ChildId; 8]>> = if let &mut Octant::Branch {
+                coord: branch_coord,
+                bounds: branch_bounds,
+            } = this_node {
+                if let Some(competitor) = competitor {
+                    // case 2a: there's a competitor
+
+                    // if there's a competitor, that should only mean that this octant isn't in focus
+                    debug_assert!(branch_coord.suboctant(focus).is_none());
+
+                    // short circuit using bounds
+                    let closest_suboct = branch_coord.closest_suboctant(focus);
+                    for d in 0..3 {
+                        if closest_suboct[d] == Pole::N {
+                            if (competitor.manhattan_dist(focus) as i64) <
+                                branch_bounds.min[d] as i64 - focus.comps[d] as i64 {
+                                return None;
+                            }
+                        } else {
+                            if (competitor.manhattan_dist(focus) as i64) <
+                                focus.comps[d] as i64 - branch_bounds.max[d] as i64 {
+                                return None;
+                            }
+                        }
+                    }
+
+                    // convert the child guard into guards for all its children
+                    // TODO: this could be refactored by passing in the branch indices in the correct
+                    // TODO: order when converting the child guard into its children guards
+
+                    let mut child_guards: [Option<Option<NodeWriteGuard<'tree, 'node, Octant<T>, [ChildId; 8]>>>; 8] =
+                        Default::default();
+
+                    children.into_all_children_write(|branch, child| {
+                        child_guards[branch] = Some(child);
+                    });
+
+                    // suboct search for the best child
+                    let mut best: Option<(NodeWriteGuard<'tree, 'node, Octant<T>, [ChildId; 8]>, BaseCoord)> = None;
+                    suboct_search_from(
+                        Some(closest_suboct),
+                        true,
+                        |suboct| {
+                            if let Some(mut better_child) = child_guards[suboct.to_index()]
+                                .take().unwrap()
+                                .and_then(|mut child_guard| Self::find_closest(
+                                    child_guard,
+                                    focus,
+                                    Some(best
+                                        .as_ref()
+                                        .map(|&(_, best_coord)| best_coord)
+                                        .unwrap_or(competitor))
+                                )) {
+                                let better_coord = match better_child.elem() {
+                                    &mut Octant::Leaf {
+                                        coord,
+                                        ..
+                                    } => coord,
+                                    &mut Octant::Branch {
+                                        ..
+                                    } => unreachable!("Octant::find_closest returned branch guard")
+                                };
+                                best = Some((better_child, better_coord));
+                            }
+                        }
+                    );
+
+                    // done
+                    best.map(|(child, _)| child)
+
+
+                    /*
+                    suboct_search_from(
+                        Some(closest_suboct),
+                        true,
+                        |suboct| {
+                            if let Some(better) = children
+                                .borrow_child_write(suboct.to_index()).unwrap()
+                                .and_then(|child_guard| Self::find_closest(
+                                    child_guard,
+                                    focus,
+                                    Some(best.unwrap_or(competitor)),
+                                ))
+                                .map(|mut better_guard| match better_guard.elem() {
+                                    &mut Octant::Leaf {
+                                        coord,
+                                        ..
+                                    } => coord,
+                                    &mut Octant::Branch {
+                                        ..
+                                    } => unreachable!("Octant::find_closest returned branch guard")
+                                }) {
+                                best = Some(better);
+                            }
+                        }
+                    );
+                    */
+
+                    // done finding the best child, now simply acquire and unwrap it
+                    //best.map(|child_coord| {
+                    //    let branch_index = branch_coord.suboctant(child_coord).unwrap().to_index();
+                    //    children.into_child_write(branch_index).unwrap().unwrap()
+                    //})
+                } else {
+                    // case 2b: there's no competitor
+                    // simply suboct search for the best child from the closest suboct
+
+                    // convert the child guard into guards for all its children
+                    let mut child_guards: [Option<Option<NodeWriteGuard<'tree, 'node, Octant<T>, [ChildId; 8]>>>; 8] =
+                        Default::default();
+
+                    children.into_all_children_write(|branch, child| {
+                        child_guards[branch] = Some(child);
+                    });
+
+                    // suboct search for the best child
+                    let closest_suboct: SubOctant = branch_coord.closest_suboctant(focus);
+                    let mut best: Option<(NodeWriteGuard<'tree, 'node, Octant<T>, [ChildId; 8]>, BaseCoord)> = None;
+                    suboct_search_from(
+                        Some(closest_suboct),
+                        true,
+                        |suboct| {
+                            if let Some(mut better_child) = child_guards[suboct.to_index()]
+                                .take().unwrap()
+                                .and_then(|child_guard| Self::find_closest(
+                                    child_guard,
+                                    focus,
+                                    best
+                                        .as_ref()
+                                        .map(|&(_, coord)| coord)
+                                )) {
+                                let better_coord = match better_child.elem() {
+                                    &mut Octant::Leaf {
+                                        coord,
+                                        ..
+                                    } => coord,
+                                    &mut Octant::Branch {
+                                        ..
+                                    } => unreachable!("Octant::find_closest returned branch guard")
+                                };
+                                best = Some((better_child, better_coord));
+                            }
+                        }
+                    );
+
+                    // done
+                    best.map(|(child, _)| child)
+
+                    /*
+
+                    let closest_suboct: SubOctant = branch_coord.closest_suboctant(focus);
+
+                    let mut best: Option<BaseCoord> = None;
+                    suboct_search_from(
+                        Some(closest_suboct),
+                        true,
+                        |suboct| {
+                            if let Some(better) = children
+                                .borrow_child_write(suboct.to_index()).unwrap()
+                                .and_then(|child_guard| Self::find_closest(
+                                    child_guard,
+                                    focus,
+                                    best
+                                ))
+                                .map(|mut better_guard| match better_guard.elem() {
+                                    &mut Octant::Leaf {
+                                        coord,
+                                        ..
+                                    } => coord,
+                                    &mut Octant::Branch {
+                                        ..
+                                    } => unreachable!("Octant::find_closest returned branch guard")
+                                }) {
+                                best = Some(better);
+                            }
+                        }
+                    );
+
+                    // done finding the best child, now simply acquire and unwrap it
+                    best.map(|child_coord| {
+                        let branch_index = branch_coord.suboctant(child_coord).unwrap().to_index();
+                        children.into_child_write(branch_index).unwrap().unwrap()
+                    })
+                    */
+                }
+            } else {
+                unreachable!()
+            };
+            closest
         }
+
     }
 }
+
+// TODO: implement closest operation
+// TODO: implement removal
 
 /*
 pub struct Tree<T> {
@@ -700,8 +954,7 @@ impl<'a, T: Debug> Debug for BranchChildrenDebug<'a, T> {
 }
 */
 
-/*
-#[cfg(not(test))]
+
 extern crate rand;
 extern crate stopwatch;
 
@@ -709,9 +962,10 @@ use stopwatch::Stopwatch;
 
 use rand::prng::XorShiftRng;
 use rand::{Rng, SeedableRng};
-*/
+
 
 fn main() {
+    /*
     let mut tree: Octree<u64> = Octree::new();
 
     //tree.add([0, 0, 0], 0);
@@ -721,7 +975,43 @@ fn main() {
     }
 
     println!("{:#?}", tree);
+    */
 
+    let mut tree: Octree<()> = Octree::new();
+    let mut elems: Vec<[u64; 3]> = Vec::new();
+
+    let seed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let mut rng: XorShiftRng = SeedableRng::from_seed(seed);
+
+    for i in 0..1000 {
+        let elem = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
+        tree.add(elem, ());
+        elems.push(elem);
+    }
+
+    for i in 0..1000 {
+        let focus = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
+
+        let tree_closest = tree.closest_key(focus).unwrap();
+
+        elems.sort_by_key(|&elem| BaseCoord::from(elem).manhattan_dist(focus.into()));
+        let vec_closest = elems[0];
+
+        if BaseCoord::from(tree_closest).manhattan_dist(focus.into()) !=
+            BaseCoord::from(vec_closest).manhattan_dist(focus.into()) {
+
+            eprintln!();
+            eprintln!("incorrect closest (i={}):", i);
+            eprintln!("focus = {:?}", focus);
+            eprintln!("tree closest = {:?}", tree_closest);
+            eprintln!("vec closest = {:?}", vec_closest);
+            eprintln!();
+        } else {
+            println!("correct! (i={}, focus={:?})", i, focus);
+        }
+    }
+
+    println!("done!");
 
     /*
     let mut tree: Tree<()> = Tree::new();

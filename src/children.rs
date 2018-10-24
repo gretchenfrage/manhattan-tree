@@ -132,6 +132,7 @@ impl<T> Children<T> {
 }
 */
 
+// TODO: look into if beginning really should be option
 pub fn suboct_search_from(start: Option<SubOctant>, include_start: bool, mut func: impl FnMut(SubOctant)) {
     if let Some(start) = start {
         if include_start {
