@@ -33,7 +33,7 @@ impl<T> Octree<T> {
     pub fn add(&mut self, coord: impl Into<BaseCoord>, elem: T) {
         let coord = coord.into();
         let op = self.tree.operation();
-        if let Some(mut root) = op.write_root() {
+        if let Some(root) = op.write_root() {
             let (octant, children) = root.into_split();
             octant.add(children, coord, elem);
         } else {
@@ -44,7 +44,7 @@ impl<T> Octree<T> {
     fn closest_key(&mut self, focus: impl Into<BaseCoord>) -> Option<[u64; 3]> {
         let focus = focus.into();
         let op = self.tree.operation();
-        if let Some(mut root) = op.write_root() {
+        if let Some(root) = op.write_root() {
             match Octant::find_closest(root, focus, None).unwrap().elem() {
                 &mut Octant::Leaf {
                     coord,
@@ -137,7 +137,7 @@ impl<T> Octant<T> {
                 if let Some(child) = branch_coord.suboctant(elem_coord) {
                     // case 2a: the new element is a child of this branch
                     // simply add to the appropriate child, or create a child
-                    if let Some(mut child) = children
+                    if let Some(child) = children
                         .borrow_child_write(child.to_index())
                         .unwrap() {
                         let (child_octant, subchildren) = child.into_split();
@@ -237,7 +237,7 @@ impl<T> Octant<T> {
             }
         } else {
             // case 2: we're a branch
-            let (this_node, mut children) = this_guard.into_split();
+            let (this_node, children) = this_guard.into_split();
             let closest: Option<NodeWriteGuard<'tree, 'node, Octant<T>, [ChildId; 8]>> = if let &mut Octant::Branch {
                 coord: branch_coord,
                 bounds: branch_bounds,
@@ -283,7 +283,7 @@ impl<T> Octant<T> {
                         |suboct| {
                             if let Some(mut better_child) = child_guards[suboct.to_index()]
                                 .take().unwrap()
-                                .and_then(|mut child_guard| Self::find_closest(
+                                .and_then(|child_guard| Self::find_closest(
                                     child_guard,
                                     focus,
                                     Some(best
@@ -363,6 +363,7 @@ impl<T> Octant<T> {
 extern crate rand;
 extern crate stopwatch;
 
+#[allow(unused_imports)]
 use stopwatch::Stopwatch;
 
 use rand::prng::XorShiftRng;
@@ -376,7 +377,7 @@ fn main() {
     let seed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let mut rng: XorShiftRng = SeedableRng::from_seed(seed);
 
-    for i in 0..1000 {
+    for _ in 0..1000 {
         let elem = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
         tree.add(elem, ());
         elems.push(elem);

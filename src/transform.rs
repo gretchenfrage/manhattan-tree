@@ -13,6 +13,7 @@ pub fn replace<T>(elem: &mut T, func: impl FnOnce(T) -> T) {
 
 /// Mutate a referenced element by transferring ownership through a function, which also
 /// produces an output data which is returned from this function.
+#[allow(dead_code)]
 pub fn replace_and_get<T, O>(elem: &mut T, func: impl FnOnce(T) -> (T, O)) -> O {
     unsafe {
         let elem_ref = elem;
