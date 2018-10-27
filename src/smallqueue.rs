@@ -41,7 +41,6 @@ impl<T> SmallQueue<T> {
         })
     }
 
-    #[allow(dead_code)]
     pub fn remove(&mut self) -> Option<T> {
         replace_and_get(&mut self.state, |state| match state {
             SmallQueueState::Zero => (SmallQueueState::Zero, None),
@@ -55,6 +54,13 @@ impl<T> SmallQueue<T> {
                 }
             }
         })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match &self.state {
+            &SmallQueueState::Zero => true,
+            _ => false,
+        }
     }
 }
 

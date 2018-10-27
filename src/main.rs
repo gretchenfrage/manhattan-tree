@@ -1,4 +1,5 @@
 #![feature(nll)]
+#![feature(vec_remove_item)]
 
 extern crate num;
 extern crate bonzai;
@@ -39,9 +40,10 @@ impl<T> Octree<T> {
         } else {
             op.put_root_elem(Octant::leaf_of(coord, elem));
         }
+        op.finish_and_gc();
     }
 
-    fn closest_key(&mut self, focus: impl Into<BaseCoord>) -> Option<[u64; 3]> {
+    pub fn closest_key(&mut self, focus: impl Into<BaseCoord>) -> Option<[u64; 3]> {
         let focus = focus.into();
         let op = self.tree.operation();
         if let Some(root) = op.write_root() {
@@ -57,6 +59,96 @@ impl<T> Octree<T> {
         } else {
             None
         }
+    }
+
+    pub fn remove_closest(&mut self, focus: impl Into<BaseCoord>) -> Option<T> {
+        let focus = focus.into();
+        let mut op = self.tree.operation();
+        let elem = if let Some(root) = op.write_root() {
+            // if root exists, there must be an element
+
+            // find the closest element in the form of a guard
+            let mut closest = Octant::find_closest(root, focus, None).unwrap();
+
+            // remove an elem from the queue
+            let (elem, remove_node) = {
+                if let &mut Octant::Leaf {
+                    elems: ref mut queue,
+                    ..
+                } = closest.elem() {
+                    let elem = queue.remove().unwrap();
+                    (elem, queue.is_empty())
+                } else {
+                    unreachable!()
+                }
+            };
+
+            let closest = closest.into_read().index();
+
+            // and if the leaf has become empty, we must remove the node
+            if remove_node {
+                // turn it into a traverser
+                let mut node = op.traverse_from(closest).unwrap();
+
+                match node.this_branch_index() {
+                    Ok(leaf_index) => {
+                        // traverse to the leaf's parent, remove the leaf
+                        node.seek_parent().unwrap();
+                        node.detach_child(leaf_index).unwrap().unwrap();
+
+                        // if the current branch has only 1 child, we must remove it
+                        // and detach the one child with the parent
+                        let mut child = None;
+                        let mut num_children = 0;
+                        for b in 0..8 {
+                            if node.has_child(b).unwrap() {
+                                child = Some(b);
+                                num_children += 1;
+                            }
+                        }
+                        match (num_children, child) {
+                            (0, _) => unreachable!("branch old had one child"),
+                            (1, Some(only_child_index)) => {
+                                // detach the child
+                                let only_child = node.detach_child(only_child_index).unwrap().unwrap();
+                                // seek the parent
+                                // TODO: add a `become` operation to node write guard and tree write traverser
+                                match node.this_branch_index() {
+                                    Ok(branch_index) => {
+                                        // traverse to the branch's parent
+                                        node.seek_parent().unwrap();
+
+                                        // attach the leaf in replacement of the branch
+                                        node.as_write_guard().children().put_child_tree(branch_index, only_child).unwrap();
+                                    },
+                                    Err(ThisIsRoot) => {
+                                        // the branch which forked into the two leaves was the root
+                                        // so make the leaf the root in replacement of the branch
+                                        node.op.put_root_tree(only_child);
+                                    }
+                                }
+                            },
+                            (_, None) => unreachable!(),
+                            (_, Some(_)) => (),
+                        };
+                    },
+                    Err(ThisIsRoot) => {
+                        // the leaf we're removing is the root, so no further
+                        // restructuring is required
+                        node.detach_this();
+                    }
+                }
+            }
+
+            // done
+            Some(elem)
+        } else {
+            // no element
+            None
+        };
+        // TODO: finish and gc on drop
+        //op.finish_and_gc();
+        elem
     }
 }
 
@@ -371,7 +463,7 @@ use rand::{Rng, SeedableRng};
 
 
 fn main() {
-    let mut tree: Octree<()> = Octree::new();
+    let mut tree: Octree<[u64; 3]> = Octree::new();
     let mut elems: Vec<[u64; 3]> = Vec::new();
 
     let seed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
@@ -379,14 +471,15 @@ fn main() {
 
     for _ in 0..1000 {
         let elem = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
-        tree.add(elem, ());
+        tree.add(elem, elem);
         elems.push(elem);
     }
 
     for i in 0..1000 {
         let focus = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
 
-        let tree_closest = tree.closest_key(focus).unwrap();
+        //let tree_closest = tree.closest_key(focus).unwrap();
+        let tree_closest = tree.remove_closest(focus).unwrap();
 
         elems.sort_by_key(|&elem| BaseCoord::from(elem).manhattan_dist(focus.into()));
         let vec_closest = elems[0];
@@ -403,6 +496,8 @@ fn main() {
         } else {
             println!("correct! (i={}, focus={:?})", i, focus);
         }
+
+        elems.remove_item(&tree_closest);
     }
 
     println!("done!");
