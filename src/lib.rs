@@ -92,27 +92,21 @@ impl<T: 'static> Octree<T> {
                     unreachable!()
                 }
             };
-            eprintln!("removed elem from queue");
 
             let closest = closest.into_read().index();
-            eprintln!("closest = {:?}", closest);
 
             // and if the leaf has become empty, we must remove the node
             if remove_node {
-                eprintln!("removing node");
 
                 // turn it into a traverser
                 let mut node = op.traverse_from(closest).unwrap();
 
                 match node.this_branch_index() {
                     Ok(leaf_index) => {
-                        eprintln!("this is leaf");
 
                         // traverse to the leaf's parent, remove the leaf
                         node.seek_parent().unwrap();
                         node.detach_child(leaf_index).unwrap().unwrap();
-
-                        eprintln!("detached child");
 
                         // if the current branch has only 1 child, we must remove it
                         // and detach the one child with the parent
@@ -125,7 +119,6 @@ impl<T: 'static> Octree<T> {
                             }
                         }
 
-                        eprintln!("num_children = {}", num_children);
 
                         match (num_children, child) {
                             (0, _) => unreachable!("branch old had one child"),
@@ -136,7 +129,6 @@ impl<T: 'static> Octree<T> {
                                 // TODO: add a `become` operation to node write guard and tree write traverser
                                 match node.this_branch_index() {
                                     Ok(branch_index) => {
-                                        eprintln!("traversing to parent");
                                         // traverse to the branch's parent
                                         node.seek_parent().unwrap();
 
@@ -146,7 +138,6 @@ impl<T: 'static> Octree<T> {
                                     Err(ThisIsRoot) => {
                                         // the branch which forked into the two leaves was the root
                                         // so make the leaf the root in replacement of the branch
-                                        eprintln!("putting root tree {:#?}", only_child.read().index());
                                         node.op.put_root_tree(only_child);
                                     }
                                 }
