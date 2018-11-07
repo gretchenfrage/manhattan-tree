@@ -7,6 +7,5 @@ authors = ["Phoenix <kahlo.phoenix@gmail.com>"]
 bonzai = { path = "../bonzai" }
 num = "0.2.0"
 
-#[dev-dependencies]
+[dev-dependencies]
 rand = "0.5.5"
-stopwatch = "0.0.7"

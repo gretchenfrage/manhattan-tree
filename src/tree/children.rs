@@ -76,63 +76,6 @@ impl Index<usize> for SubOctant {
     }
 }
 
-/*
-/// A group of 8 items, identified by suboctant.
-#[derive(Debug)]
-pub struct Children<T> {
-    ppp: T,
-    npp: T,
-    pnp: T,
-    ppn: T,
-    pnn: T,
-    npn: T,
-    nnp: T,
-    nnn: T
-}
-impl<T> Children<T> {
-    pub fn new(mut gen: impl FnMut(SubOctant) -> T) -> Self {
-        Children {
-            ppp: gen([Pole::P, Pole::P, Pole::P]),
-            npp: gen([Pole::N, Pole::P, Pole::P]),
-            pnp: gen([Pole::P, Pole::N, Pole::P]),
-            ppn: gen([Pole::P, Pole::P, Pole::N]),
-            pnn: gen([Pole::P, Pole::N, Pole::N]),
-            npn: gen([Pole::N, Pole::P, Pole::N]),
-            nnp: gen([Pole::N, Pole::N, Pole::P]),
-            nnn: gen([Pole::N, Pole::N, Pole::N]),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn get(&self, key: SubOctant) -> &T {
-        match key {
-            [Pole::P, Pole::P, Pole::P] => &self.ppp,
-            [Pole::N, Pole::P, Pole::P] => &self.npp,
-            [Pole::P, Pole::N, Pole::P] => &self.pnp,
-            [Pole::P, Pole::P, Pole::N] => &self.ppn,
-            [Pole::P, Pole::N, Pole::N] => &self.pnn,
-            [Pole::N, Pole::P, Pole::N] => &self.npn,
-            [Pole::N, Pole::N, Pole::P] => &self.nnp,
-            [Pole::N, Pole::N, Pole::N] => &self.nnn,
-        }
-    }
-
-    pub fn get_mut(&mut self, key: SubOctant) -> &mut T {
-        match key {
-            [Pole::P, Pole::P, Pole::P] => &mut self.ppp,
-            [Pole::N, Pole::P, Pole::P] => &mut self.npp,
-            [Pole::P, Pole::N, Pole::P] => &mut self.pnp,
-            [Pole::P, Pole::P, Pole::N] => &mut self.ppn,
-            [Pole::P, Pole::N, Pole::N] => &mut self.pnn,
-            [Pole::N, Pole::P, Pole::N] => &mut self.npn,
-            [Pole::N, Pole::N, Pole::P] => &mut self.nnp,
-            [Pole::N, Pole::N, Pole::N] => &mut self.nnn,
-        }
-    }
-}
-*/
-
-// TODO: look into if beginning really should be option
 pub fn suboct_search_from(start: Option<SubOctant>, include_start: bool, mut func: impl FnMut(SubOctant)) {
     if let Some(start) = start {
         if include_start {

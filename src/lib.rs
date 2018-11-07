@@ -5,14 +5,14 @@
 extern crate num;
 extern crate bonzai;
 
+pub mod tree;
+pub mod collection;
+pub mod space;
+
 #[cfg(test)]
 mod test;
-mod smallqueue;
-mod coord;
-mod transform;
-mod children;
-mod bounds;
 
+/*
 use smallqueue::SmallQueue;
 use coord::*;
 use children::*;
@@ -40,7 +40,7 @@ impl<T: 'static> Octree<T> {
 
     pub fn add(&mut self, coord: impl Into<BaseCoord>, elem: T) {
         let coord = coord.into();
-        let op = self.tree.operation();
+        let mut op = self.tree.operation();
         if let Some(root) = op.write_root() {
             let (octant, children) = root.into_split();
             octant.add(children, coord, elem);
@@ -55,7 +55,7 @@ impl<T: 'static> Octree<T> {
 
     pub fn closest_key(&mut self, focus: impl Into<BaseCoord>) -> Option<[u64; 3]> {
         let focus = focus.into();
-        let op = self.tree.operation();
+        let mut op = self.tree.operation();
         if let Some(root) = op.write_root() {
             match Octant::find_closest(root, focus, None).unwrap().elem() {
                 &mut Octant::Leaf {
@@ -93,17 +93,14 @@ impl<T: 'static> Octree<T> {
                 }
             };
 
-            let closest = closest.into_read().index();
-
             // and if the leaf has become empty, we must remove the node
             if remove_node {
 
                 // turn it into a traverser
-                let mut node = op.traverse_from(closest).unwrap();
+                let mut node = traverse_from!(op, closest);
 
                 match node.this_branch_index() {
                     Ok(leaf_index) => {
-
                         // traverse to the leaf's parent, remove the leaf
                         node.seek_parent().unwrap();
                         node.detach_child(leaf_index).unwrap().unwrap();
@@ -133,24 +130,26 @@ impl<T: 'static> Octree<T> {
                                         node.seek_parent().unwrap();
 
                                         // attach the leaf in replacement of the branch
-                                        node.as_write_guard().children().put_child_tree(branch_index, only_child).unwrap();
+                                        (&mut node).into_write_guard().children().put_child_tree(branch_index, only_child).unwrap();
                                     },
-                                    Err(ThisIsRoot) => {
+                                    Err(NoParent::Root) => {
                                         // the branch which forked into the two leaves was the root
                                         // so make the leaf the root in replacement of the branch
                                         node.op.put_root_tree(only_child);
-                                    }
+                                    },
+                                    Err(NoParent::Detached) => unreachable!()
                                 }
                             },
                             (_, None) => unreachable!(),
                             (_, Some(_)) => (),
                         };
                     },
-                    Err(ThisIsRoot) => {
+                    Err(NoParent::Root) => {
                         // the leaf we're removing is the root, so no further
                         // restructuring is required
                         node.detach_this();
-                    }
+                    },
+                    Err(NoParent::Detached) => unreachable!(),
                 };
             }
 
@@ -160,9 +159,6 @@ impl<T: 'static> Octree<T> {
             // no element
             None
         };
-        // TODO: finish and gc on drop
-        //op.finish_and_gc();
-        //mem::drop(op);
         elem
     }
 }
@@ -377,12 +373,17 @@ impl<T: 'static> Octant<T> {
                     // TODO: this could be refactored by passing in the branch indices in the correct
                     // TODO: order when converting the child guard into its children guards
 
+                    /*
                     let mut child_guards: [Option<Option<NodeWriteGuard<'op, 'node, 't, Octant<T>, [ChildId; 8]>>>; 8] =
                         Default::default();
 
                     children.into_all_children_write(|branch, child| {
                         child_guards[branch] = Some(child);
                     });
+                    */
+                    let mut child_guards: [Option<NodeWriteGuard<'op, 'node, 't, Octant<T>, [ChildId; 8]>>; 8] =
+                        Default::default();
+                    children.into_all_children(&mut child_guards).unwrap();
 
                     // suboct search for the best child
                     let mut best: Option<(NodeWriteGuard<'op, 'node, 't, Octant<T>, [ChildId; 8]>, BaseCoord)> = None;
@@ -391,7 +392,7 @@ impl<T: 'static> Octant<T> {
                         true,
                         |suboct| {
                             if let Some(mut better_child) = child_guards[suboct.to_index()]
-                                .take().unwrap()
+                                .take()
                                 .and_then(|child_guard| Self::find_closest(
                                     child_guard,
                                     focus,
@@ -421,12 +422,17 @@ impl<T: 'static> Octant<T> {
                     // simply suboct search for the best child from the closest suboct
 
                     // convert the child guard into guards for all its children
+                    /*
                     let mut child_guards: [Option<Option<NodeWriteGuard<'op, 'node, 't, Octant<T>, [ChildId; 8]>>>; 8] =
                         Default::default();
 
                     children.into_all_children_write(|branch, child| {
                         child_guards[branch] = Some(child);
                     });
+                    */
+                    let mut child_guards: [Option<NodeWriteGuard<'op, 'node, 't, Octant<T>, [ChildId; 8]>>; 8] =
+                        Default::default();
+                    children.into_all_children(&mut child_guards).unwrap();
 
                     // suboct search for the best child
                     let closest_suboct: SubOctant = branch_coord.closest_suboctant(focus);
@@ -436,7 +442,7 @@ impl<T: 'static> Octant<T> {
                         true,
                         |suboct| {
                             if let Some(mut better_child) = child_guards[suboct.to_index()]
-                                .take().unwrap()
+                                .take()
                                 .and_then(|child_guard| Self::find_closest(
                                     child_guard,
                                     focus,
@@ -468,71 +474,5 @@ impl<T: 'static> Octant<T> {
         }
 
     }
-}
-/*
-extern crate rand;
-extern crate stopwatch;
-
-#[allow(unused_imports)]
-use stopwatch::Stopwatch;
-
-use rand::prng::XorShiftRng;
-use rand::{Rng, SeedableRng};
-
-const ELEMS: usize = 1000000;
-
-
-fn main() {
-    let mut tree: Octree<[u64; 3]> = Octree::new();
-    //let mut elems: Vec<[u64; 3]> = Vec::new();
-
-    let seed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-    let mut rng: XorShiftRng = SeedableRng::from_seed(seed);
-
-    let mut timer = Stopwatch::start_new();
-
-    for _ in 0..ELEMS {
-        let elem = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
-        tree.add(elem, elem);
-        //elems.push(elem);
-    }
-
-    let elapsed = timer.elapsed().as_nanos();
-    let average = elapsed as f64 / ELEMS as f64;
-    println!("average insertion took {} ns", average);
-
-    timer.restart();
-
-    for i in 0..ELEMS {
-        let focus = [rng.gen::<u64>() / 8, rng.gen::<u64>() / 8, rng.gen::<u64>() / 8];
-
-        let tree_closest = tree.remove_closest(focus).unwrap();
-
-        /*
-        elems.sort_by_key(|&elem| BaseCoord::from(elem).manhattan_dist(focus.into()));
-        let vec_closest = elems[0];
-
-        if BaseCoord::from(tree_closest).manhattan_dist(focus.into()) !=
-            BaseCoord::from(vec_closest).manhattan_dist(focus.into()) {
-
-            eprintln!();
-            eprintln!("incorrect closest (i={}):", i);
-            eprintln!("focus = {:?}", focus);
-            eprintln!("tree closest = {:?}", tree_closest);
-            eprintln!("vec closest = {:?}", vec_closest);
-            eprintln!();
-        } else {
-            println!("correct! (i={}, focus={:?})", i, focus);
-        }
-
-        elems.remove_item(&tree_closest);
-        */
-    }
-
-    let elapsed = timer.elapsed().as_nanos();
-    let average = elapsed as f64 / ELEMS as f64;
-    println!("average removal took {} ns", average);
-
-    println!("done!");
 }
 */
