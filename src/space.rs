@@ -1,6 +1,5 @@
 
 use std::i64;
-use num::Float;
 
 pub trait CoordSpace {
     type Coord;

@@ -28,7 +28,7 @@ impl<T, S: CoordSpace> MTreeQueue<T, S> {
     }
 
     pub fn is_empty(&self) -> bool {
-        unimplemented!()
+        self.tree.is_empty()
     }
 
     pub fn remove(&mut self, focus: S::Coord) -> Option<T> {

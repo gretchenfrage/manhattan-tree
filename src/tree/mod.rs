@@ -9,7 +9,6 @@ pub use self::transform::*;
 use self::coord::*;
 use self::children::*;
 use self::bounds::*;
-use self::transform::*;
 
 use std::fmt::Debug;
 
@@ -47,9 +46,14 @@ impl<T> MTree<T> {
     }
 
     /// Get a read guard for the element at the key.
-    pub fn get<'t>(op: &mut TreeOperation<'t, Octant<T>, [ChildId; 8]>, coord: impl Into<BaseCoord>)
-        -> Option<NodeReadGuard<'t, Octant<T>, [ChildId; 8]>> {
-        unimplemented!()
+    pub fn get<'t: 'o, 'o>(op: &'o TreeOperation<'t, Octant<T>, [ChildId; 8]>, key: impl Into<BaseCoord>)
+        -> Option<NodeReadGuard<'o, Octant<T>, [ChildId; 8]>> {
+        let key = key.into();
+        if let Some(root) = op.read_root() {
+            Some(Octant::get(root, key).unwrap())
+        } else {
+            None
+        }
     }
 
     pub fn get_closest<'t: 'o, 'o>(op: &'o TreeOperation<'t, Octant<T>, [ChildId; 8]>,
@@ -62,74 +66,6 @@ impl<T> MTree<T> {
             None
         }
     }
-
-    /*
-    pub fn remove<'t: 'o, 'o>(mut node: TreeWriteTraverser<'o, 't, Octant<T>, [ChildId; 8]>) -> T {
-        let octant = match node.this_branch_index() {
-            Ok(leaf_index) => {
-                // traverse to the leaf's parent, remove the leaf, acquire the element
-                node.seek_parent().unwrap();
-                let elem = node.detach_child(leaf_index).unwrap().unwrap().into_elem();
-
-                // if the current branch only has 1 child, we must remove it
-                // and reattach the one child to the parent
-                let mut child = None;
-                let mut num_children = 0;
-                for b in 0..8 {
-                    if node.has_child(b).unwrap() {
-                        child = Some(b);
-                        num_children += 1;
-                        if num_children >= 2 {
-                            break;
-                        }
-                    }
-                }
-
-                match (num_children, child) {
-                    (0, _) => unreachable!("old branch only had one child"),
-                    (1, Some(only_child_index)) => {
-                        // detach the child
-                        let only_child = node.detach_child(only_child_index).unwrap().unwrap();
-                        // seek the parent
-                        match node.this_branch_index() {
-                            Ok(branch_index) => {
-                                // traverse to the branch's parent
-                                node.seek_parent().unwrap();
-
-                                // attach the leaf in replacement with the branch
-                                (&mut node).into_write_guard().children().put_child_tree(
-                                    branch_index, only_child
-                                ).unwrap();
-                            },
-                            Err(NoParent::Root) => {
-                                // this branch which forked into the two leaves was the root
-                                // so make the leaf the root in replacement of the branch
-                                node.op.put_root_tree(only_child);
-                            },
-                            Err(NoParent::Detached) => unreachable!()
-                        }
-                    },
-                    (_, None) => unreachable!(),
-                    (_, Some(_)) => (),
-                };
-
-                elem
-            },
-            Err(NoParent::Root) => {
-                // the leaf we're removing is the root, so no further restructuring is required
-                node.detach_this().into_elem()
-            },
-            Err(NoParent::Detached) => unreachable!()
-        };
-        match octant {
-            Octant::Leaf {
-                elem,
-                ..
-            } => elem,
-            Octant::Branch { .. } => unreachable!()
-        }
-    }
-    */
 
     pub fn remove<'o, 't: 'o>(mut node: TreeWriteTraverser<'o, 't, Octant<T>, [ChildId; 8]>) -> T {
         let octant = match node.this_branch_index() {
@@ -197,119 +133,9 @@ impl<T> MTree<T> {
         }
     }
 
-    /*
-    pub fn remove<'t: 'r, 'r>(op: &mut TreeOperation<'t, Octant<T>, [ChildId; 8]>,
-                      node: impl IntoReadGuard<'r, Octant<T>, [ChildId; 8]>) -> T {
-        // traverse from the guard
-        let mut node = traverse_from!(op, node);
-
-        let octant = match node.this_branch_index() {
-            Ok(leaf_index) => {
-                // traverse to the leaf's parent, remove the leaf, acquire the element
-                node.seek_parent().unwrap();
-                let elem = node.detach_child(leaf_index).unwrap().unwrap().into_elem();
-
-                // if the current branch only has 1 child, we must remove it
-                // and reattach the one child to the parent
-                let mut child = None;
-                let mut num_children = 0;
-                for b in 0..8 {
-                    if node.has_child(b).unwrap() {
-                        child = Some(b);
-                        num_children += 1;
-                        if num_children >= 2 {
-                            break;
-                        }
-                    }
-                }
-
-                match (num_children, child) {
-                    (0, _) => unreachable!("old branch only had one child"),
-                    (1, Some(only_child_index)) => {
-                        // detach the child
-                        let only_child = node.detach_child(only_child_index).unwrap().unwrap();
-                        // seek the parent
-                        match node.this_branch_index() {
-                            Ok(branch_index) => {
-                                // traverse to the branch's parent
-                                node.seek_parent().unwrap();
-
-                                // attach the leaf in replacement with the branch
-                                (&mut node).into_write_guard().children().put_child_tree(
-                                    branch_index, only_child
-                                ).unwrap();
-                            },
-                            Err(NoParent::Root) => {
-                                // this branch which forked into the two leaves was the root
-                                // so make the leaf the root in replacement of the branch
-                                node.op.put_root_tree(only_child);
-                            },
-                            Err(NoParent::Detached) => unreachable!()
-                        }
-                    },
-                    (_, None) => unreachable!(),
-                    (_, Some(_)) => (),
-                };
-
-                elem
-            },
-            Err(NoParent::Root) => {
-                // the leaf we're removing is the root, so no further restructuring is required
-                node.detach_this().into_elem()
-            },
-            Err(NoParent::Detached) => unreachable!()
-        };
-        match octant {
-            Octant::Leaf {
-                elem,
-                ..
-            } => elem,
-            Octant::Branch { .. } => unreachable!()
-        }
+    pub fn is_empty(&self) -> bool {
+        self.tree.read_root().is_none()
     }
-    */
-
-    /*
-    pub fn get(&self, coord: impl Into<BaseCoord>) -> Option<NodeReadGuard<Octant<T>, [ChildId; 8]>> {
-        unimplemented!()
-    }
-    */
-
-
-    /*
-    /// Get the read guard for the element closest to the key.
-    pub fn find_closest(&self, focus: impl Into<BaseCoord>) -> Option<NodeReadGuard<Octant<T>, [ChildId; 8]>> {
-        let focus = focus.into();
-        self.tree.read_root()
-            .map(|root_guard| Octant::closest(root_guard, focus, None)
-                .unwrap())
-    }
-
-    pub fn find_closest_then<T>(&mut self, focus: impl Into<BaseCoord>,
-                                then: impl FnOnce(
-                                    &mut TreeOperation<Octant<T>, [ChildId; 8]>,
-                                    NodeReadGuard<Octant<T>, [ChildId; 8]>
-                                ) -> T) -> Option<T> {
-        let mut op = self.tree.operation();
-        if let Some(root) = op.read_root() {
-            let closest = Octant::closest(root, focus, None).unwrap();
-            let output = then(&mut op, closest);
-            Some(output)
-        } else {
-            None
-        }
-    }
-
-    //pub fn mutate_from_closest<'s: 'op, 'op, O>(&'s mut self, focus: impl Into<BaseCoord>, mutator: impl FnOnce(TreeWriteTraverser<'op, 't, Octant<T>, [ChildId; 8]>) -> O) -> O;
-
-    /// Properly remove the guarded element.
-    pub fn remove(&mut self, node: NodeReadGuard<T, [ChildId; 8]>) {
-        let mut op = self.tree.operation();
-    }
-    */
-
-    // TODO: simply find-closest, remove-closest, and remove-key
-    // TODO: keep it simple
 }
 
 pub trait Upserter<T> {
@@ -585,6 +411,30 @@ impl<T> Octant<T> {
                     // done
                     best.map(|(child, _)| child)
                 }
+            }
+        }
+    }
+
+    fn get<'tree>(this_guard: NodeReadGuard<'tree, Octant<T>, [ChildId; 8]>, key: BaseCoord)
+        -> Option<NodeReadGuard<'tree, Octant<T>, [ChildId; 8]>> {
+        match &*this_guard {
+            &Octant::Branch {
+                coord: branch_coord,
+                ..
+            } => match branch_coord.suboctant(key) {
+                Some(child_suboct) => match this_guard.child(child_suboct.to_index()).unwrap() {
+                    Some(child_guard) => Self::get(child_guard, key),
+                    None => None
+                },
+                None => None
+            },
+            &Octant::Leaf {
+                coord: leaf_coord,
+                ..
+            } => if leaf_coord == key {
+                Some(this_guard)
+            } else {
+                None
             }
         }
     }
