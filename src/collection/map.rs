@@ -42,23 +42,52 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
         }
     }
 
-    pub fn get_closest(&self, focus: S::Coord) -> Option<(S::Coord, &T)> {
-        unimplemented!()
+    pub fn get_closest(&self, focus: S::Coord) -> Option<&T> {
+        MTree::get_closest(&self.tree, self.space.raw(focus))
+            .map(|guard| match guard.elem {
+                &Octant::Leaf {
+                    ref elem,
+                    ..
+                } => elem,
+                &Octant::Branch { .. } => unreachable!()
+            })
     }
 
-    pub fn get_closest_mut(&mut self, focus: S::Coord) -> Option<(S::Coord, &mut T)> {
-        unimplemented!()
+    pub fn get_closest_mut(&mut self, focus: S::Coord) -> Option<&mut T> {
+        if let Some(node) = MTree::get_closest(&self.tree, self.space.raw(focus)) {
+            let octant = get_elem_mut!(self.tree, node);
+            let elem = match octant {
+                &mut Octant::Leaf {
+                    ref mut elem,
+                    ..
+                } => elem,
+                &mut Octant::Branch { .. } => unreachable!()
+            };
+            Some(elem)
+        } else {
+            None
+        }
     }
 
     pub fn remove(&mut self, key: S::Coord) -> Option<T> {
-        unimplemented!()
+        let mut op = self.tree.operation();
+        if let Some(node) = MTree::get(&op, self.space.raw(key)) {
+            Some(MTree::remove(traverse_from!(op, node)))
+        } else {
+            None
+        }
     }
 
-    pub fn remove_closest(&mut self, focus: S::Coord) -> Option<(S::Coord, T)> {
-        unimplemented!()
+    pub fn remove_closest(&mut self, focus: S::Coord) -> Option<T> {
+        let mut op = self.tree.operation();
+        if let Some(node) = MTree::get_closest(&op, self.space.raw(focus)) {
+            Some(MTree::remove(traverse_from!(op, node)))
+        } else {
+            None
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        unimplemented!()
+        self.tree.is_empty()
     }
 }

@@ -33,8 +33,8 @@ impl CoordSpace for U32Space {
     }
 }
 
-pub struct I64Space;
-impl CoordSpace for I64Space {
+pub struct I63Space;
+impl CoordSpace for I63Space {
     type Coord = [i64; 3];
 
     fn raw(&self, coord: [i64; 3]) -> [u64; 3] {
