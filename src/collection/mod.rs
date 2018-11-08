@@ -1,8 +1,8 @@
 
-mod map;
 mod queue;
-//mod smallqueue;
+mod map;
+mod set;
 
-//pub use self::map::MTreeMap;
 pub use self::queue::MTreeQueue;
+pub use self::map::MTreeMap;
 
