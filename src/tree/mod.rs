@@ -15,24 +15,24 @@ use std::fmt::Debug;
 use bonzai::*;
 
 pub struct MTree<T> {
-    tree: Tree<Octant<T>, [ChildId; 8]>
+    inner: Tree<Octant<T>, [ChildId; 8]>
 }
 impl<T> MTree<T> {
     /// Create a new empty manhattan tree.
     pub fn new() -> Self {
         MTree {
-            tree: Tree::new()
+            inner: Tree::new()
         }
     }
 
     pub fn debug_nodes(&self) -> DebugNodes<Octant<T>, [ChildId; 8]> where T: Debug {
-        self.tree.debug_nodes()
+        self.inner.debug_nodes()
     }
 
     /// Insert a new element at the key, or if an element already exists, mutate it.
     pub fn upsert(&mut self, coord: impl Into<BaseCoord>, upserter: impl Upserter<T>) {
         let coord = coord.into();
-        let mut op = self.tree.operation();
+        let mut op = self.inner.operation();
         if let Some(root) = op.write_root() {
             let (octant, children) = root.into_split();
             octant.upsert(children, coord, upserter);
@@ -42,25 +42,25 @@ impl<T> MTree<T> {
     }
 
     pub fn operation(&mut self) -> TreeOperation<Octant<T>, [ChildId; 8]> {
-        self.tree.operation()
+        self.inner.operation()
     }
 
     /// Get a read guard for the element at the key.
-    pub fn get<'t: 'o, 'o>(op: &'o TreeOperation<'t, Octant<T>, [ChildId; 8]>, key: impl Into<BaseCoord>)
-        -> Option<NodeReadGuard<'o, Octant<T>, [ChildId; 8]>> {
+    pub fn get<'t>(tree: &'t impl ReadRoot<Octant<T>, [ChildId; 8]>, key: impl Into<BaseCoord>)
+        -> Option<NodeReadGuard<'t, Octant<T>, [ChildId; 8]>> {
         let key = key.into();
-        if let Some(root) = op.read_root() {
+        if let Some(root) = tree.read_root() {
             Some(Octant::get(root, key).unwrap())
         } else {
             None
         }
     }
 
-    pub fn get_closest<'t: 'o, 'o>(op: &'o TreeOperation<'t, Octant<T>, [ChildId; 8]>,
-                                   focus: impl Into<BaseCoord>)
-        -> Option<NodeReadGuard<'o, Octant<T>, [ChildId; 8]>> {
+    pub fn get_closest<'t>(tree: &'t impl ReadRoot<Octant<T>, [ChildId; 8]>,
+                           focus: impl Into<BaseCoord>)
+        -> Option<NodeReadGuard<'t, Octant<T>, [ChildId; 8]>> {
         let focus = focus.into();
-        if let Some(root) = op.read_root() {
+        if let Some(root) = tree.read_root() {
             Some(Octant::closest(root, focus, None).unwrap())
         } else {
             None
@@ -134,7 +134,17 @@ impl<T> MTree<T> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tree.read_root().is_none()
+        self.inner.read_root().is_none()
+    }
+}
+impl<T> ReadRoot<Octant<T>, [ChildId; 8]> for MTree<T> {
+    fn read_root<'s>(&'s self) -> Option<NodeReadGuard<'s, Octant<T>, [ChildId; 8]>> {
+        self.inner.read_root()
+    }
+}
+impl<T> GetElemMut<Octant<T>> for MTree<T> {
+    fn get_elem_mut(&mut self, index: NodeIndex) -> Option<&mut Octant<T>> {
+        self.inner.get_elem_mut(index)
     }
 }
 
