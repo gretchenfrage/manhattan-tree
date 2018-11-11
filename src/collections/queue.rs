@@ -8,7 +8,13 @@ use std::fmt;
 
 use bonzai::traverse_from;
 
-
+/// A priority queue based on the manhattan tree, where each element is associated with a coord
+/// in a particular coordinate space, and upon removal, a focus is specified, and the closest
+/// element to that focus is removed.
+///
+/// When there are multiple elements inserted to the same key, they form a FIFO queue. This queue
+/// has a small-queue optimization such that it only creates a heap allocation when more
+/// than one element is allocated.
 pub struct MTreeQueue<T, S: CoordSpace> {
     space: S,
     tree: MTree<SmallQueue<T>>

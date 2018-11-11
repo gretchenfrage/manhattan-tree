@@ -6,7 +6,7 @@ extern crate num;
 extern crate bonzai;
 
 pub mod tree;
-pub mod collection;
+pub mod collections;
 pub mod space;
 
 #[cfg(test)]

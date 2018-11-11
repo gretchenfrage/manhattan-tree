@@ -3,6 +3,10 @@ use bonzai::*;
 use tree::*;
 use space::CoordSpace;
 
+/// A manhattan tree key/value mapping, where the keys are coordinates in some coordinate space.
+///
+/// Allows the usual map operations, as well as getting, getting mutably, and removing the closest
+/// element in the tree to a particular focus.
 pub struct MTreeMap<T, S: CoordSpace> {
     tree: MTree<T>,
     space: S,
@@ -69,6 +73,10 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
         }
     }
 
+    pub fn insert(&mut self, key: S::Coord, value: T) {
+        self.tree.upsert(self.space.raw(key), InsertUpserter(value))
+    }
+
     pub fn remove(&mut self, key: S::Coord) -> Option<T> {
         let mut op = self.tree.operation();
         if let Some(node) = MTree::get(&op, self.space.raw(key)) {
@@ -89,5 +97,22 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
 
     pub fn is_empty(&self) -> bool {
         self.tree.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        (&self.tree).into_iter()
+    }
+}
+
+struct InsertUpserter<T>(T);
+impl<T> Upserter<T> for InsertUpserter<T> {
+    fn update(self, elem: &mut T) {
+        let InsertUpserter(value) = self;
+        *elem = value;
+    }
+
+    fn insert(self) -> T {
+        let InsertUpserter(value) = self;
+        value
     }
 }

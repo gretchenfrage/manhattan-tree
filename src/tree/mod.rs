@@ -1,8 +1,9 @@
 
-mod coord;
+pub mod coord;
 mod transform;
 mod children;
 mod bounds;
+mod iter;
 
 pub use self::transform::*;
 
@@ -14,6 +15,7 @@ use std::fmt::Debug;
 
 use bonzai::*;
 
+/// The underlying manhattan tree type upon which more convenient abstractions can be built.
 pub struct MTree<T> {
     inner: Tree<Octant<T>, [ChildId; 8]>
 }
@@ -25,8 +27,14 @@ impl<T> MTree<T> {
         }
     }
 
+    /// Expose the inner bonzai's debug nodes.
     pub fn debug_nodes(&self) -> DebugNodes<Octant<T>, [ChildId; 8]> where T: Debug {
         self.inner.debug_nodes()
+    }
+
+    /// Get a bonzai read traverser at the root.
+    pub fn traverse_read_root(&self) -> Option<TreeReadTraverser<Octant<T>, [ChildId; 8]>> {
+        self.inner.traverse_read_root()
     }
 
     /// Insert a new element at the key, or if an element already exists, mutate it.
@@ -41,6 +49,7 @@ impl<T> MTree<T> {
         }
     }
 
+    /// Begin a bonzai operation to mutate the tree.
     pub fn operation(&mut self) -> TreeOperation<Octant<T>, [ChildId; 8]> {
         self.inner.operation()
     }
@@ -50,12 +59,13 @@ impl<T> MTree<T> {
         -> Option<NodeReadGuard<'t, Octant<T>, [ChildId; 8]>> {
         let key = key.into();
         if let Some(root) = tree.read_root() {
-            Some(Octant::get(root, key).unwrap())
+            Octant::get(root, key)
         } else {
             None
         }
     }
 
+    /// Get a read guard for the closest element to the key.
     pub fn get_closest<'t>(tree: &'t impl ReadRoot<Octant<T>, [ChildId; 8]>,
                            focus: impl Into<BaseCoord>)
         -> Option<NodeReadGuard<'t, Octant<T>, [ChildId; 8]>> {
@@ -67,6 +77,7 @@ impl<T> MTree<T> {
         }
     }
 
+    /// Remove an element from a tree that is guarded by a write traverser.
     pub fn remove<'o, 't: 'o>(mut node: TreeWriteTraverser<'o, 't, Octant<T>, [ChildId; 8]>) -> T {
         let octant = match node.this_branch_index() {
             Ok(leaf_index) => {
@@ -133,6 +144,7 @@ impl<T> MTree<T> {
         }
     }
 
+    /// Is this tree empty?
     pub fn is_empty(&self) -> bool {
         self.inner.read_root().is_none()
     }
@@ -148,12 +160,14 @@ impl<T> GetElemMut<Octant<T>> for MTree<T> {
     }
 }
 
+/// A trait used for the MTree.upsert method.
 pub trait Upserter<T> {
     fn update(self, elem: &mut T);
 
     fn insert(self) -> T;
 }
 
+/// A node in the tree, which is either a leaf or a branch.
 #[derive(Debug)]
 pub enum Octant<T> {
     Leaf {

@@ -16,7 +16,7 @@ use num::abs;
 /// from `components[N] * 2 ^ scale` (inclusive) to `(components[N] + 1) * 2 ^ scale` (exclusive).
 ///
 /// Currently, the coord is hard-coded to use 64-bit coordinates and three dimensions. Genericity
-/// with regard to these properties is a prime candidite for a future feaature.
+/// with regard to these properties is a prime candidite for a future feature.
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct OctCoord {
     base: BaseCoord,

@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Phoenix <kahlo.phoenix@gmail.com>"]
 
 [dependencies]
-bonzai = { path = "../bonzai" }
+bonzai = "0.2.1"
 num = "0.2.0"
 
 [dev-dependencies]
