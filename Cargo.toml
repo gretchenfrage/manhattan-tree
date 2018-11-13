@@ -4,7 +4,9 @@ version = "0.1.0"
 authors = ["Phoenix <kahlo.phoenix@gmail.com>"]
 description = "A spatial tree which can effiently find closest key to a point, by manhattan distance."
 readme = "README.md"
-repository = 
+repository = "https://github.com/gretchenfrage/manhattan-tree"
+categories = ["data-structures"]
+license = "MIT"
 
 [dependencies]
 bonzai = "0.2.1"
