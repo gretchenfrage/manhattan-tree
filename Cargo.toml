@@ -2,6 +2,9 @@
 name = "manhattan-tree"
 version = "0.1.0"
 authors = ["Phoenix <kahlo.phoenix@gmail.com>"]
+description = "A spatial tree which can effiently find closest key to a point, by manhattan distance."
+readme = "README.md"
+repository = 
 
 [dependencies]
 bonzai = "0.2.1"

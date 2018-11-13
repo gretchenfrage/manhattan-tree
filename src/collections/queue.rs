@@ -20,6 +20,7 @@ pub struct MTreeQueue<T, S: CoordSpace> {
     tree: MTree<SmallQueue<T>>
 }
 impl<T, S: CoordSpace> MTreeQueue<T, S> {
+    /// New, empty MTreeQueue.
     pub fn new(space: S) -> Self {
         MTreeQueue {
             space,
@@ -27,16 +28,19 @@ impl<T, S: CoordSpace> MTreeQueue<T, S> {
         }
     }
 
+    /// Insert an element at a coordinate.
     pub fn insert(&mut self, coord: S::Coord, elem: T) {
         self.tree.upsert(self.space.raw(coord), SmallQueueUpserter {
             elem
         });
     }
 
+    /// Is the queue empty?
     pub fn is_empty(&self) -> bool {
         self.tree.is_empty()
     }
 
+    /// Remove an element at the key closest to the focus.
     pub fn remove(&mut self, focus: S::Coord) -> Option<T> {
         let mut op = self.tree.operation();
         if let Some(closest) = MTree::get_closest(&op, self.space.raw(focus)) {

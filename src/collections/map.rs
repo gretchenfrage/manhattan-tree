@@ -12,6 +12,7 @@ pub struct MTreeMap<T, S: CoordSpace> {
     space: S,
 }
 impl<T, S: CoordSpace> MTreeMap<T, S> {
+    /// New empty MTreeMap.
     pub fn new(space: S) -> Self {
         MTreeMap {
             tree: MTree::new(),
@@ -19,6 +20,7 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
         }
     }
 
+    /// Key/value lookup.
     pub fn get(&self, key: S::Coord) -> Option<&T> {
         MTree::get(&self.tree, self.space.raw(key))
             .map(|guard| match guard.elem {
@@ -30,6 +32,7 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
             })
     }
 
+    /// Mutable key/value lookup.
     pub fn get_mut(&mut self, key: S::Coord) -> Option<&mut T> {
         if let Some(node) = MTree::get(&self.tree, self.space.raw(key)) {
             let octant = get_elem_mut!(self.tree, node);
@@ -46,6 +49,7 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
         }
     }
 
+    /// Closest manhattan distance lookup.
     pub fn get_closest(&self, focus: S::Coord) -> Option<&T> {
         MTree::get_closest(&self.tree, self.space.raw(focus))
             .map(|guard| match guard.elem {
@@ -57,6 +61,7 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
             })
     }
 
+    /// Mutable closest manhattan distance lookup.
     pub fn get_closest_mut(&mut self, focus: S::Coord) -> Option<&mut T> {
         if let Some(node) = MTree::get_closest(&self.tree, self.space.raw(focus)) {
             let octant = get_elem_mut!(self.tree, node);
@@ -73,10 +78,12 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
         }
     }
 
+    /// Key/value insertion.
     pub fn insert(&mut self, key: S::Coord, value: T) {
         self.tree.upsert(self.space.raw(key), InsertUpserter(value))
     }
 
+    /// Key/value removal.
     pub fn remove(&mut self, key: S::Coord) -> Option<T> {
         let mut op = self.tree.operation();
         if let Some(node) = MTree::get(&op, self.space.raw(key)) {
@@ -86,6 +93,7 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
         }
     }
 
+    /// Closest manahttan distance removal.
     pub fn remove_closest(&mut self, focus: S::Coord) -> Option<T> {
         let mut op = self.tree.operation();
         if let Some(node) = MTree::get_closest(&op, self.space.raw(focus)) {
@@ -95,10 +103,12 @@ impl<T, S: CoordSpace> MTreeMap<T, S> {
         }
     }
 
+    /// Are there 0 elements?
     pub fn is_empty(&self) -> bool {
         self.tree.is_empty()
     }
 
+    /// Borrow out each element, in no particular order.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         (&self.tree).into_iter()
     }
