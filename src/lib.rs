@@ -4,6 +4,8 @@
 
 extern crate bonzai;
 extern crate num;
+extern crate smallqueue;
+extern crate through;
 
 pub mod tree;
 pub mod collections;

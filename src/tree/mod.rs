@@ -1,11 +1,10 @@
 
 pub mod coord;
-mod transform;
 mod children;
 mod bounds;
 mod iter;
 
-pub use self::transform::*;
+pub use through::*;
 
 use self::coord::*;
 use self::children::*;
@@ -189,7 +188,7 @@ impl<T> Octant<T> {
 
     fn upsert(&mut self, mut children: ChildWriteGuard<Octant<T>, [ChildId; 8]>,
               elem_coord: BaseCoord, upserter: impl Upserter<T>) {
-        replace(self, |octant| match octant {
+        through(self, |octant| match octant {
             Octant::Leaf {
                 coord: leaf_coord,
                 elem: mut leaf_elem,
